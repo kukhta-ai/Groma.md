@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import { buildPackage } from '../plugins/scanners/python/build.ts'
 import type { CodeSymbol, HttpEndpointSegment, HttpRequestSegment, ScanHttpEndpoint, ScannerPlugin } from '@groma/scanner'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
 import { httpRelationships } from '../src/http-relationships.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import { loadScannerRegistry } from '../src/scanner/registry.ts'
@@ -232,8 +232,8 @@ test.concurrent('lint finds identical and near-duplicate Python functions but ne
   const { root, temporary, artifact } = await fixture('python-duplicated-logic')
   try {
     await cp(path.join(fixtures, 'empty-project'), root, { recursive: true })
-    await addScanner(root, artifact)
-    const lint = Bun.spawn([process.execPath, cli, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+    await addFixtureScanner(root, artifact)
+    const lint = Bun.spawn([process.execPath, cli, '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)
     // Each finding starts on an unindented line; similar copies are marked as not identical.
@@ -254,11 +254,11 @@ test.concurrent('lint finds identical and near-duplicate Python functions but ne
 test.concurrent('a component outlines its Python file beside a TypeScript file under the Python visibility rules', async () => {
   const { root, temporary, artifact } = await fixture('python-outline')
   try {
-    await addScanner(root, artifact)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual([...new Set(component.code.map(reference => reference.file))])
     const symbol = ({ name, line, visibility, entry }: CodeSymbol) => [name, line, visibility, entry]
     const python = files.find(file => file.file.endsWith('.py'))!.declarations.map(declaration => [
@@ -334,9 +334,9 @@ test.concurrent('a shared exclusion keeps invalid Python outside parsing when va
   try {
     await cp(path.join(fixtures, 'empty-project'), root, { recursive: true })
     await writeFile(path.join(root, 'bad.py'), 'def broken(:\n')
-    await addScanner(root, artifact)
+    await addFixtureScanner(root, artifact)
     await writeGromaConfig(root, { ...await readGromaConfig(root), exclude: ['/bad.py'] })
-    const batch = await (await loadScannerRegistry(root)).collectObservations(root)
+    const batch = await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)
     expect(batch.failures).toEqual([])
     expect(batch.observations[0]?.files.some(file => file.file === 'bad.py')).toBe(false)
   } finally { await rm(temporary, { recursive: true, force: true }) }

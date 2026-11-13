@@ -1,3 +1,4 @@
+import { escaped } from '../atoms/escape.ts'
 import { monogram } from '../../../work/pins.ts'
 import type { WorkPin } from '../../../work/pins.ts'
 import { MARKS } from '../atoms/marks.ts'
@@ -62,7 +63,7 @@ export function fillWorkBadge(host: HTMLElement, pin: WorkPin, finishingAt?: num
   host.classList.toggle('work-finishing', finishing)
   host.querySelector<HTMLElement>('.face.front')!.innerHTML = pin.assignee === null
     ? BACKLOG_MARK
-    : MARKS[pin.assignee.replace(/^@/, '')] ?? monogram(pin.assignee)
+    : MARKS[pin.assignee.replace(/^@/, '')] ?? escaped(monogram(pin.assignee))
   host.querySelector<SVGCircleElement>('.ring .done')!.style.strokeDasharray =
     `${(pin.total === 0 ? 0 : pin.done / pin.total) * RING_LENGTH} ${RING_LENGTH}`
 }

@@ -11,7 +11,7 @@ import { buildPackage } from '../plugins/scanners/vue/build.ts'
 import vue from '../plugins/scanners/vue/package.json'
 import { loadScannerRegistry } from '../src/scanner/registry.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, approveConfiguredScanners, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { checkScannerReadiness } from '../src/scanner/modules/readiness.ts'
 
 async function write(root: string, file: string, source: string): Promise<void> {
@@ -30,7 +30,7 @@ async function repository(hidden = false): Promise<string> {
   const child = Bun.spawn(['git', 'init', '--quiet'], { cwd: root, stdout: 'ignore', stderr: 'pipe' })
   const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
   expect(code, stderr).toBe(0)
-  await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+  await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
   return root
 }
 
@@ -47,17 +47,18 @@ test.concurrent('fully excluded Vue sources skip readiness and scanning until th
     await buildPackage(artifact)
     const scanners = [{ id: 'vue', source: artifact, include: vue.groma.scanner.include }]
     await writeGromaConfig(root, { scanners, exclude: ['/fixtures/'], workSources: [] })
-    const readiness = await checkScannerReadiness(root)
+    await approveConfiguredScanners(root)
+    const readiness = await checkScannerReadiness(root, pluginFixtureOptions(root))
     expect(readiness.map(item => item.project)).toEqual(['ready'])
-    const excluded = await (await loadScannerRegistry(root)).collectObservations(root)
+    const excluded = await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)
     expect(excluded.failures).toEqual([])
     expect(excluded.observations).toEqual([])
 
     await writeGromaConfig(root, { scanners, workSources: [] })
-    const included = await (await loadScannerRegistry(root)).collectObservations(root)
+    const included = await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)
     expect(included.failures).toEqual([])
     expect(included.observations.map(observation => observation.scanner.id)).toEqual(['vue'])
-  } finally { await Promise.all([root, artifact].map(directory => rm(directory, { recursive: true, force: true }))) }
+  } finally { await closePluginFixture(root); await rm(artifact, { recursive: true, force: true }) }
 })
 
 test.concurrent('global and scanner exclusions keep readiness and scan hooks off excluded inputs', async () => {
@@ -75,19 +76,20 @@ test.concurrent('global and scanner exclusions keep readiness and scan hooks off
     // The scanner's only candidate is excluded, so Groma calls neither hook.
     const scanners = [{ id: 'fixture', source: './plugin', include: ['**/*.fixture'], settings: { input: 'hidden/source.fixture' } }]
     await writeGromaConfig(root, { scanners, exclude: ['/hidden/'], workSources: [] })
-    expect((await checkScannerReadiness(root)).map(item => item.project)).toEqual(['ready'])
-    expect((await (await loadScannerRegistry(root)).collectObservations(root)).failures).toEqual([])
+    await approveConfiguredScanners(root)
+    expect((await checkScannerReadiness(root, pluginFixtureOptions(root))).map(item => item.project)).toEqual(['ready'])
+    expect((await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).failures).toEqual([])
 
     await writeGromaConfig(root, { scanners, workSources: [] })
-    expect((await checkScannerReadiness(root)).map(item => item.project)).toEqual(['blocked'])
-    expect((await (await loadScannerRegistry(root)).collectObservations(root)).failures.map(failure => failure.scanner))
+    expect((await checkScannerReadiness(root, pluginFixtureOptions(root))).map(item => item.project)).toEqual(['blocked'])
+    expect((await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).failures.map(failure => failure.scanner))
       .toEqual(['fixture'])
 
     // The scanner's own list keeps its hooks off the input as well.
     await writeGromaConfig(root, { scanners: [{ ...scanners[0]!, exclude: ['/hidden/'] }], workSources: [] })
-    expect((await checkScannerReadiness(root)).map(item => item.project)).toEqual(['ready'])
-    expect((await (await loadScannerRegistry(root)).collectObservations(root)).failures).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+    expect((await checkScannerReadiness(root, pluginFixtureOptions(root))).map(item => item.project)).toEqual(['ready'])
+    expect((await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).failures).toEqual([])
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a scanner receives the files its include list names, less excluded ones and, unless useGitignore is false, ignored ones', async () => {
@@ -107,14 +109,14 @@ test.concurrent('a scanner receives the files its include list names, less exclu
         roots: [{ id: 'source', kind: 'package', name: 'Fixture', file: 'package.json' }],
         files: files.map(file => ({ file, roots: ['source'], symbols: [] })) }
     } }`)
-    await addScanner(root, './plugin')
-    const read = async () => JSON.parse((await (await loadScannerRegistry(root)).collectObservations(root)).observations[0]!.diagnostics[0]!.message)
+    await addFixtureScanner(root, './plugin')
+    const read = async () => JSON.parse((await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).observations[0]!.diagnostics[0]!.message)
     expect(await read()).toEqual(['src/app.ts'])
-    const registry = await loadScannerRegistry(root)
+    const registry = await loadScannerRegistry(root, pluginFixtureOptions(root))
     expect(['src/new.ts', 'src/notes.md', 'excluded/new.ts'].map(file => registry.watchesFile(file))).toEqual([true, false, false])
     await writeGromaConfig(root, { ...await readGromaConfig(root), useGitignore: false })
     expect(await read()).toEqual(['node_modules/lib/index.ts', 'src/app.ts'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 function observation(language: string): ScanObservation {
@@ -166,9 +168,9 @@ test.concurrent('every scanner filters complete evidence without narrowing invoc
   const root = await repository()
   try {
     for (const file of observation('fixture').files) await write(root, file.file, 'export const value = 1\n')
-    for (const id of ['first', 'second']) await addScanner(root, await plugin(root, id))
+    for (const id of ['first', 'second']) await addFixtureScanner(root, await plugin(root, id))
     await configure(root, ['/scripts/', '**/*.html'])
-    const registry = await loadScannerRegistry(root)
+    const registry = await loadScannerRegistry(root, pluginFixtureOptions(root))
     const scans = (await registry.collectObservations(root)).observations
     expect(scans.map(scan => scan.scanner.id).sort()).toEqual(['first', 'second', 'typescript'])
     for (const scan of scans) {
@@ -192,28 +194,28 @@ test.concurrent('every scanner filters complete evidence without narrowing invoc
       .toEqual(['src/kept.ts', 'src/kept.ts', 'src/kept.ts', 'src/other.ts', 'src/other.ts', 'src/other.ts'])
     expect(model.relationships).toEqual([])
     await configure(root, ['**'])
-    expect((await (await loadScannerRegistry(root)).collectObservations(root)).observations).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+    expect((await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).observations).toEqual([])
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('the lists of a scanner, written from its install defaults, follow the global list for that scanner alone', async () => {
   const root = await repository()
   try {
     for (const file of observation('fixture').files) await write(root, file.file, 'export const value = 1\n')
-    await addScanner(root, await plugin(root, 'first'))
-    await addScanner(root, await plugin(root, 'second', undefined, ['/src/other.ts']))
+    await addFixtureScanner(root, await plugin(root, 'first'))
+    await addFixtureScanner(root, await plugin(root, 'second', undefined, ['/src/other.ts']))
     const config = await readGromaConfig(root)
     expect(config.scanners.find(scanner => scanner.id === 'second')).toMatchObject({ include: ['**/*.ts', '**/*.html'], exclude: ['/src/other.ts'] })
     await writeGromaConfig(root, { exclude: ['/scripts/'], scanners: config.scanners.map(scanner =>
       scanner.id === 'first' ? { ...scanner, exclude: ['!/scripts/'] } : scanner), workSources: [] })
-    const registry = await loadScannerRegistry(root)
+    const registry = await loadScannerRegistry(root, pluginFixtureOptions(root))
     const files = Object.fromEntries((await registry.collectObservations(root)).observations
       .map(scan => [scan.scanner.id, scan.files.map(file => file.file).sort()]))
     expect(files.first).toEqual(['scripts/hidden.ts', 'src/kept.ts', 'src/other.ts', 'src/view.html'])
     expect(files.second).toEqual(['src/kept.ts', 'src/view.html'])
     // Only the first scanner still reads the folder, so a change there still triggers it.
     expect(registry.watchesFile('scripts/page.html')).toBeTrue()
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('rescan keeps stored component ownership and authored content while omitting new excluded files', async () => {
@@ -221,7 +223,7 @@ test.concurrent('rescan keeps stored component ownership and authored content wh
   try {
     await write(root, 'scripts/hidden.ts', 'export const value = 1\n')
     await write(root, 'src/kept.ts', 'export const value = 1\n')
-    await reconcileScanObservations(root, (await (await loadScannerRegistry(root)).collectObservations(root)).observations)
+    await reconcileScanObservations(root, (await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).observations)
     const initial = await loadAnnotatedArchitecture(root)
     const stored = initial.elements.find(element => element.code.some(code => code.file === 'scripts/hidden.ts'))!
     await editArchitecture(root, { id: stored.id, overview: 'Builds the release package.' })
@@ -230,10 +232,10 @@ test.concurrent('rescan keeps stored component ownership and authored content wh
     await write(root, 'scripts/new.ts', 'export const another = 2\n')
     await configure(root, ['/scripts/'])
     for (let scan = 0; scan < 2; scan++) {
-      await reconcileScanObservations(root, (await (await loadScannerRegistry(root)).collectObservations(root)).observations)
+      await reconcileScanObservations(root, (await (await loadScannerRegistry(root, pluginFixtureOptions(root))).collectObservations(root)).observations)
     }
     const current = await loadAnnotatedArchitecture(root)
     expect(current.elements).toEqual(authored.elements)
     expect(current.relationships).toEqual(authored.relationships)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

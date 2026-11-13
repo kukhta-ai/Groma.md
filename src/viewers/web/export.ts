@@ -20,6 +20,8 @@ export interface WebExportHandle {
 }
 
 export interface WebExportOptions {
+  ackSourceExport?: boolean
+  sourceManifest?: string
   url?: string
   revision?: string
   from?: string
@@ -105,7 +107,7 @@ async function exportRevisions(root: string, options: WebExportOptions): Promise
 
 async function replaceFile(filename: string, contents: string | Uint8Array): Promise<void> {
   const temporary = `${filename}.${process.pid}.tmp`
-  await writeFile(temporary, contents)
+  await writeFile(temporary, contents, { flag: 'wx', mode: 0o600 })
   await rename(temporary, filename)
 }
 
@@ -117,18 +119,38 @@ function versionScript(generation: number): string {
   return `globalThis.dispatchEvent(new CustomEvent(${JSON.stringify(PUBLISHED_VERSION_EVENT)}, { detail: ${generation} }));\n`
 }
 
+/** Raw captured texts let private consumers inspect every selected revision before delivery. */
+export function capturedSourceManifest(snapshot: WebBootPayload) {
+  if (snapshot.delivery.kind !== 'published') throw new Error('Expected a captured export snapshot')
+  return {
+    schemaVersion: 1,
+    snapshots: snapshot.delivery.views
+      .filter(view => view.payload.comparison === undefined)
+      .map(view => ({
+        revision: view.payload.revision?.id ?? null,
+        files: view.reads.sources.map(item => ({ path: item.file, content: item.source.source })),
+      })),
+  }
+}
+
 /** Writes the normal viewer as one static snapshot or two commits with comparison views. */
 export async function exportWebViewer(
   repositoryRoot: string,
   outputDirectory: string,
   options: WebExportOptions = {},
 ): Promise<WebExportHandle> {
+  if (options.ackSourceExport !== true) {
+    throw new Error('Export contains complete repository source, including selected historical revisions. Confirm with --ack-source-export.')
+  }
+  if (options.sourceManifest !== undefined && !path.isAbsolute(options.sourceManifest)) {
+    throw new Error('--source-manifest requires an absolute private file path')
+  }
   const revisions = await exportRevisions(repositoryRoot, options)
   const url = options.url === undefined ? undefined : new URL(options.url)
   if (url !== undefined && !url.pathname.endsWith('/')) url.pathname += '/'
   const output = path.resolve(outputDirectory)
   const renderer = await bundleRenderer()
-  await mkdir(output, { recursive: true })
+  await mkdir(output, { recursive: true, mode: 0o700 })
   await replaceFile(path.join(output, 'render.js'), renderer)
 
   let generation = Date.now()
@@ -139,6 +161,9 @@ export async function exportWebViewer(
   async function publish(): Promise<void> {
     const snapshot = await publishedSnapshot(repositoryRoot, revisions, ++generation)
     if (closed) return
+    if (options.sourceManifest !== undefined) {
+      await replaceFile(options.sourceManifest, `${JSON.stringify(capturedSourceManifest(snapshot))}\n`)
+    }
     const covers = await generateCovers(snapshot)
     for (const theme of coverThemes) await replaceFile(path.join(output, coverFile(theme)), covers[theme])
     await replaceFile(path.join(output, 'snapshot.js'), snapshotScript(snapshot))

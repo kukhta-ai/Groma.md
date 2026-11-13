@@ -6,6 +6,7 @@ import { loadWelcomeModel, welcomeSheet } from '../../welcome/model.ts'
 import { paintShell } from '../../welcome/view.ts'
 import { wrap } from './panes/text.ts'
 import { text } from './atoms/text.ts'
+import type { PluginChangeProposal } from '../../plugins/approval.ts'
 
 /** A keyboard-only settings page, shared by the launcher and the live terminal map. */
 export async function mountPluginSettings(renderer: CliRenderer, session: ScannerSession, root: string): Promise<void> {
@@ -20,6 +21,8 @@ export async function mountPluginSettings(renderer: CliRenderer, session: Scanne
   let input: { action: 'add' | 'update'; value: string; id?: string } | undefined
   let message = ''
   let failedAction: PluginSettingsAction | undefined
+  let approval: { proposal: PluginChangeProposal; answer(value: boolean): void } | undefined
+  let approvalScroll = 0
   const done = Promise.withResolvers<void>()
   const frame = new FrameBufferRenderable(renderer, {
     id: 'scanner-settings', width: renderer.width, height: renderer.height, position: 'absolute', left: 0, top: 0, zIndex: 100,
@@ -81,7 +84,7 @@ export async function mountPluginSettings(renderer: CliRenderer, session: Scanne
     line(`Plugins                  [a] Add plugin${failedAction ? '  [r] Retry installation' : ''}`, y, green)
     const recommended = session.state.plugins.filter(item => item.kind === 'scanner' && !item.listed && item.installSource).length
     const missing = session.state.plugins.filter(item => item.status === 'missing').length
-    line(`[t] Automatic updates: ${session.state.automaticUpdates ? 'On' : 'Off'}`, y + 1)
+    line(`[t] Check for updates automatically: ${session.state.automaticUpdates ? 'On' : 'Off'}`, y + 1)
     line([recommended ? `[i] Install recommended scanners (${recommended})` : '', missing ? `[m] Install missing plugins (${missing})` : ''].filter(Boolean).join('  '), y + 2)
     line(`Search: ${query}${searching ? '▌' : '  [/] Edit'}`, y + 3)
   }
@@ -95,16 +98,35 @@ export async function mountPluginSettings(renderer: CliRenderer, session: Scanne
     paintList(start, listHeight)
     if (details) paintDetails(visible.find(plugin => plugin.id === selectedId), start + listHeight + 1, detailHeight)
     paintFooter()
+    if (approval) paintApproval()
     frame.requestRender()
+  }
+  function paintApproval() {
+    if (!approval) return
+    const rows = ['Approve executable plugins? They run with your account privileges.',
+      ...approval.proposal.plugins.flatMap(item => [item.id, item.source, `${item.name}@${item.version}`, item.integrity]),
+      '[y] Approve exact content  [n/Esc] Cancel  [PgUp/PgDn] Scroll',
+    ].flatMap(value => wrap(value, frame.width - 8))
+    approvalScroll = Math.max(0, Math.min(approvalScroll, rows.length - frame.height + 4))
+    for (let y = 1; y < frame.height - 1; y++) line(' '.repeat(frame.width - 8), y)
+    rows.slice(approvalScroll, approvalScroll + frame.height - 4).forEach((value, index) => { line(value, index + 2, amber) })
+  }
+  function requestApproval(proposal: PluginChangeProposal): Promise<boolean> {
+    approvalScroll = 0
+    return new Promise(resolve => {
+      approval = { proposal, answer(value) { approval = undefined; resolve(value); paint() } }
+      paint()
+    })
   }
   async function change(action: PluginSettingsAction) {
     busy = true; message = ''; failedAction = undefined; paint()
-    try { await session.change(action) }
+    try { await session.change(action, requestApproval) }
     catch (error) { message = error instanceof Error ? error.message : String(error); failedAction = action }
     finally { busy = false; paint() }
   }
   function close() {
     if (closed) return
+    approval?.answer(false)
     closed = true
     unsubscribe()
     renderer.keyInput.off('keypress', onKey)
@@ -178,10 +200,21 @@ export async function mountPluginSettings(renderer: CliRenderer, session: Scanne
     if (key.eventType === 'release') return
     key.preventDefault()
     if (key.ctrl && key.name === 'c') { renderer.destroy(); return }
+    if (approval) {
+      approvalKey(key)
+      paint(); return
+    }
     if (busy) return
     if (searching) searchKey(key)
     else if (input) inputKey(key)
     else navigationKey(key)
+  }
+  function approvalKey(key: KeyEvent) {
+    if (!approval) return
+    if (key.name === 'y') approval.answer(true)
+    else if (key.name === 'n' || key.name === 'escape') approval.answer(false)
+    else if (key.name === 'pagedown') approvalScroll += 5
+    else if (key.name === 'pageup') approvalScroll -= 5
   }
   const unsubscribe = session.subscribe(paint)
   renderer.keyInput.on('keypress', onKey)

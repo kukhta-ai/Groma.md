@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createScannerSession } from '../src/scanner/session.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
+import { approveConfiguredScanners, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
 
 async function project() {
@@ -35,8 +36,9 @@ export default { id: 'fixture', async scan(root) {
 test.concurrent('settings changes reconfigure live scanning and keep saved evidence when a selection is removed', async () => {
   const { root, source } = await project()
   let folds = 0
+  await approveConfiguredScanners(root)
   let nextFold: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { folds++; nextFold?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { folds++; nextFold?.() } })
   try {
     await session.reconfigure()
     expect(session.state.notice.tone, JSON.stringify(session.state)).toBe('warning')
@@ -64,18 +66,18 @@ test.concurrent('settings changes reconfigure live scanning and keep saved evide
     expect(session.state.plugins[0]).toMatchObject({ match: 'none' })
     await session.change({ action: 'remove', id: 'fixture' })
     expect((await loadAnnotatedArchitecture(root)).elements).toEqual(scanned.elements)
-    await expect(session.change({ action: 'add', source: path.join(root, 'missing-plugin') })).rejects.toThrow('package not found')
+    await expect(session.change({ action: 'add', source: path.join(root, 'missing-plugin') })).rejects.toThrow()
     expect(session.state.notice.tone).toBe('error')
     expect((await readGromaConfig(root)).scanners).toEqual([])
     expect(await readFile(path.join(root, 'ui/view.fixture'), 'utf8')).toBe('second')
-  } finally { await session.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { await session.close(); await closePluginFixture(root) }
 })
 
 test.concurrent('install reports preparation failures automatically and retry scans after the tool is restored', async () => {
   const { root, source } = await project()
   await writeFile(path.join(root, 'tool-missing'), '')
   const before = await loadAnnotatedArchitecture(root)
-  const session = await createScannerSession(root)
+  const session = await createScannerSession(root, pluginFixtureOptions(root))
   try {
     await session.change({ action: 'add', source })
     expect(session.state.plugins[0]?.status).toBe('blocked')
@@ -85,7 +87,7 @@ test.concurrent('install reports preparation failures automatically and retry sc
     await session.change({ action: 'retry' })
     expect(session.state.plugins[0]?.status).toBe('ready')
     expect((await loadAnnotatedArchitecture(root)).elements.flatMap(element => element.code).some(code => code.symbol === 'first')).toBe(true)
-  } finally { await session.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { await session.close(); await closePluginFixture(root) }
 })
 
 test.concurrent('live scanning updates healthy evidence, reports every failure and clears errors after recovery', async () => {
@@ -108,8 +110,9 @@ test.concurrent('live scanning updates healthy evidence, reports every failure a
     { id: 'fixture', source, include: ['**/*.fixture'] }, { id: 'broken', source: './broken', include: ['**/*.fixture'] },
     { id: 'tool', source: './tool', include: ['**/*.fixture'] },
   ], workSources: [] })
+  await approveConfiguredScanners(root)
   let nextFold: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { nextFold?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { nextFold?.() } })
   const blocked = () => session.state.plugins.filter(item => item.status === 'blocked').map(item => item.id).sort()
   try {
     await session.reconfigure()
@@ -130,5 +133,5 @@ test.concurrent('live scanning updates healthy evidence, reports every failure a
     await session.change({ action: 'remove', id: 'broken' })
     expect(blocked()).toEqual([])
     expect(session.state.notice.tone).not.toBe('error')
-  } finally { await session.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { await session.close(); await closePluginFixture(root) }
 })

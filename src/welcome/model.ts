@@ -36,7 +36,7 @@ export const advancedCommands = [
     content: 'Checks current evidence from installed scanners for possible duplicate logic. Does not change saved architecture. Exit code 1 means findings or a scanner failure; 0 means no findings in available evidence.',
   },
   {
-    command: 'groma export <directory>',
+    command: 'groma export <directory> --ack-source-export',
     description: 'export a static site',
     content: 'Writes a static snapshot of the stored architecture to <directory>. Serve or upload the output separately. Run the command again to publish an updated snapshot.',
   },

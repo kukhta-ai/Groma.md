@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { ScannerPlugin } from '@groma/scanner'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { readCodeStructure } from '../src/viewers/source/structure.ts'
 
 const artifact = process.env.GROMA_TEST_CSHARP_PACKAGE
@@ -16,18 +16,18 @@ packaged('a component outlines its C# files beside a TypeScript file in Code ord
     await cp(path.resolve(import.meta.dir, '../test/fixtures/csharp-outline'), root, { recursive: true })
     const git = Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'pipe' })
     expect(await git.exited).toBe(0)
-    await addScanner(root, artifact!)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact!)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
 
     expect(files.map(file => file.file)).toEqual(component.code.map(reference => reference.file))
     // Both C# files declare the partial type; only the reference that names it marks it as an entry.
     const csharp = files.filter(file => file.file.endsWith('.cs'))
       .map(file => file.declarations.find(declaration => declaration.name === 'OrderService'))
     expect(csharp.map(type => [type?.kind, type?.entry])).toEqual([['type', true], ['type', false]])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 packaged('a component with more Code files than one command line can hold is outlined', async () => {
@@ -43,7 +43,7 @@ packaged('a component with more Code files than one command line can hold is out
 
     const outline = await scanner.readCodeStructure!(root, files.map(file => ({ file, symbols: [] })), {})
     expect(outline.map(file => file.file)).toEqual(files)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 packaged('the worker reads a UTF-8 request under a locale with another encoding', async () => {
@@ -61,5 +61,5 @@ console.log(JSON.stringify(files.map(file => file.file)))`
     const [code, out, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
     expect(code, error).toBe(0)
     expect(JSON.parse(out)).toEqual(['Orders/OrderService.cs'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)

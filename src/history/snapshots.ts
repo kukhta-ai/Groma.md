@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { lstat, open, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { loadAnnotatedArchitecture } from '../core.ts'
 import { loadProjectProfile } from '../project-profile.ts'
@@ -20,12 +21,45 @@ export async function readSnapshot(root: string) {
 /** Missing files are meaningful deletions; other read failures remain visible. */
 export async function readSourceTexts(root: string, files: string[]): Promise<SourceTexts> {
   return Object.fromEntries(await Promise.all(files.map(async file => {
-    try { return [file, await readFile(path.join(root, file), 'utf8')] }
+    try { return [file, await readConfinedSource(root, file)] }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [file, undefined]
       throw error
     }
   })))
+}
+
+function assertWithin(root: string, filename: string): void {
+  const relative = path.relative(root, filename)
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('Source reference escapes the repository')
+  }
+}
+
+/** Capture only a stable regular file inside the selected repository snapshot. */
+export async function readConfinedSource(root: string, file: string): Promise<string> {
+  if (!file || file.includes('\0') || path.isAbsolute(file) || file.includes('\\')) {
+    throw new Error('Source reference must be repository-relative')
+  }
+  const canonicalRoot = await realpath(root)
+  const filename = path.resolve(canonicalRoot, file)
+  assertWithin(canonicalRoot, filename)
+  const canonical = await realpath(filename)
+  assertWithin(canonicalRoot, canonical)
+  const handle = await open(canonical, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+  try {
+    const before = await handle.stat()
+    if (!before.isFile()) throw new Error('Source reference must name a regular file')
+    const source = await handle.readFile('utf8')
+    const after = await handle.stat()
+    const current = await lstat(canonical)
+    assertWithin(canonicalRoot, await realpath(filename))
+    if (before.dev !== current.dev || before.ino !== current.ino || current.isSymbolicLink()
+      || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) {
+      throw new Error('Source changed while being captured')
+    }
+    return source
+  } finally { await handle.close() }
 }
 
 /** Read both complete roots while their archives exist, including files no longer owned on one side. */

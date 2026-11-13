@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { appendFile, cp, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import rustPackage from '../plugins/scanners/rust/package.json'
 import rustScanner, { scanRustSource } from '../plugins/scanners/rust/src/index.ts'
 
@@ -10,7 +11,6 @@ import { loadAnnotatedArchitecture } from '../src/core.ts'
 import { loadArchitecture } from '../src/architecture-reader.ts'
 import { buildArchitectureModel } from '../src/architecture-model.ts'
 import { scanRepository } from '../src/scanner.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import { readCodeStructure } from '../src/viewers/source/structure.ts'
 import type { CodeSymbol, ScanObservation } from '@groma/scanner'
@@ -26,7 +26,7 @@ async function fixture(name: string, action: (root: string) => Promise<void>) {
     await cp(path.resolve(import.meta.dir, '../test/fixtures', name), root, { recursive: true })
     await execute('git', ['init', '--quiet'], { cwd: root })
     await action(root)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }
 
 /** The files Groma hands the Rust scanner in this repository, under the package's default lists. */
@@ -119,8 +119,8 @@ rustTest('lint finds identical and near-duplicate Rust functions but never closu
     const observation = await scanRustSource(root, {}, await rustFiles(root), worker)
     expect(observation.operations!.every(operation => operation.tokens!.length > 0)).toBeTrue()
     await cp(path.resolve(import.meta.dir, '../test/fixtures/empty-project'), root, { recursive: true })
-    await addScanner(root, packagePath)
-    const lint = Bun.spawn([process.execPath, cli, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+    await addFixtureScanner(root, packagePath)
+    const lint = Bun.spawn([process.execPath, cli, '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)
     // Each finding starts on an unindented line; similar copies are marked as not identical.
@@ -146,11 +146,11 @@ rustTest('lint finds identical and near-duplicate Rust functions but never closu
 
 rustTest('a component outlines its Rust file beside a TypeScript file under the Rust visibility rules', async () => {
   await fixture('rust-outline', async root => {
-    await addScanner(root, packagePath)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, packagePath)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual([...new Set(component.code.map(reference => reference.file))])
     const symbol = ({ name, line, visibility, entry }: CodeSymbol) => [name, line, visibility, entry]
     const rust = files.find(file => file.file.endsWith('.rs'))!.declarations.map(declaration => [
@@ -320,8 +320,8 @@ rustTest('a reqwest client taken from a typed extractor sends an HTTP request', 
 rustTest('a Rust scan derives HTTP rows from the requesting file to the file that serves the endpoints', async () => {
   await fixture('rust-http', async root => {
     await cp(path.resolve(import.meta.dir, '../test/fixtures/empty-project'), root, { recursive: true })
-    await addScanner(root, packagePath)
-    await scanRepository(root)
+    await addFixtureScanner(root, packagePath)
+    await scanRepository(root, pluginFixtureOptions(root))
     const world = await loadAnnotatedArchitecture(root)
     const files = (id: string) => world.elements.find(element => element.id === id)!.code.map(code => code.file)
     const rows = world.relationships.filter(row => row.description?.startsWith('Calls HTTP endpoint'))
@@ -336,22 +336,22 @@ rustTest('a Rust scan derives HTTP rows from the requesting file to the file tha
 rustTest('registered Rust scans preserve curated ownership and a failed scan preserves the prior architecture', async () => {
   await fixture('rust-semantic', async root => {
     await execute('git', ['add', '-A'], { cwd: root })
-    await addScanner(root, packagePath)
-    await scanRepository(root)
+    await addFixtureScanner(root, packagePath)
+    await scanRepository(root, pluginFixtureOptions(root))
     const world = await loadAnnotatedArchitecture(root)
     const provider = world.elements.find(element => element.code.some(code => code.file === 'src/provider.rs'))!
     const api = world.elements.find(element => element.code.some(code => code.file === 'src/api.rs'))!
     await execute(process.execPath, [cli, 'edit', provider.id, '--combine', api.id], { cwd: root })
     await execute(process.execPath, [cli, 'edit', provider.id, '--overview', 'Owns execution.'], { cwd: root })
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const architecture = async () => buildArchitectureModel((await loadArchitecture(root)).documents)
     const before = await architecture()
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     expect(await architecture()).toEqual(before)
     const curated = (await loadAnnotatedArchitecture(root)).elements.find(element => element.id === provider.id)!
     expect(curated.code.map(code => code.file).sort()).toEqual(['src/api.rs', 'src/provider.rs'])
     await writeFile(path.join(root, 'src/provider.rs'), 'pub fn broken(')
-    expect((await scanRepository(root)).scannerFailures?.map(error => error.scanner)).toEqual(['rust'])
+    expect((await scanRepository(root, pluginFixtureOptions(root))).scannerFailures?.map(error => error.scanner)).toEqual(['rust'])
     expect(await architecture()).toEqual(before)
   })
 }, 60000)

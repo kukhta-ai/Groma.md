@@ -3,6 +3,7 @@ import type { ScanOperation } from '@groma/scanner'
 import { cp, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import { buildPackage } from '../plugins/scanners/vue/build.ts'
 import manifest from '../plugins/scanners/vue/package.json'
 import { VueEvidence } from '../plugins/scanners/vue/src/evidence.ts'
@@ -11,7 +12,6 @@ import { addComparedOperations } from '../plugins/scanners/vue/src/operations.ts
 import { vueProject } from '../plugins/scanners/vue/src/project.ts'
 import typescriptManifest from '../plugins/scanners/typescript/package.json'
 import { scanTypeScriptSource } from '../plugins/scanners/typescript/src/scan.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 
 /** The files Groma hands each scanner with its package defaults. */
@@ -39,8 +39,8 @@ test.concurrent('groma lint reports identical and near-duplicate Vue bodies, but
   const { temporary, root } = await fixture()
   try {
     await buildPackage(path.join(temporary, 'scanner'))
-    await addScanner(root, path.join(temporary, 'scanner'))
-    const lint = Bun.spawn([process.execPath, cli, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+    await addFixtureScanner(root, path.join(temporary, 'scanner'))
+    const lint = Bun.spawn([process.execPath, cli, '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([
       lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text(),
     ])

@@ -1,4 +1,4 @@
-import { readGromaConfig, updateGromaConfig } from '../config.ts'
+import { readGromaConfig, stringArray, updateGromaConfig } from '../config.ts'
 import { scannerNotice, type ScannerSetting, type PluginSettings, type PluginSettingsAction, type WorkSourceSetting } from './settings-model.ts'
 export * from './settings-model.ts'
 import type { ScannerDiscovery } from '../scanner/modules/discovery.ts'
@@ -8,7 +8,8 @@ import { configuredScannerModules, type ScannerInstallOptions, type ScannerModul
 import type { ProjectReadiness } from '../scanner/modules/readiness.ts'
 import { parseScannerSource } from '../scanner/modules/package.ts'
 import { selectPublishedScanner } from '../scanner/modules/published.ts'
-import { addPlugin, removePlugin, restoreFailure, restoreMissingPlugins, restorePlugin, updatePlugin } from './management.ts'
+import { removePlugin } from './management.ts'
+import { executePluginChange } from './approval.ts'
 import { bundledWorkSources, checkWorkSourceReadiness, type WorkSourceSelection } from '../work/sources.ts'
 
 /** Optional registry reads for an open settings dialog: newer releases of listed npm scanners. Scan readiness stays unchanged. */
@@ -56,6 +57,9 @@ function installedSetting(module: ScannerModuleLocation, proposal: ScannerDiscov
     base.message = readiness.message
   }
   if (module.status === 'missing') base.message = `Package missing: ${module.source}`
+  if (module.status === 'found' && module.approvalRequired) {
+    base.status = 'blocked'; base.message = 'Explicit executable content approval is required'; base.approvalRequired = true
+  }
   const candidate = proposal.recommendations.find(item => item.id === module.id)
   if (module.status === 'found' && candidate?.status === 'incompatible') { base.status = 'blocked'; base.message = candidate.reason }
   return base
@@ -95,8 +99,8 @@ function workSourceSetting(work: WorkSourceSelection): WorkSourceSetting {
 }
 
 /** The work-source rows: the one config.json lists, or else every bundled work source, offered to add. */
-async function workSourceSettings(root: string): Promise<WorkSourceSetting[]> {
-  const work = await checkWorkSourceReadiness(root)
+async function workSourceSettings(root: string, options: ScannerInstallOptions): Promise<WorkSourceSetting[]> {
+  const work = await checkWorkSourceReadiness(root, options)
   if (work) return [workSourceSetting(work)]
   return Object.entries(bundledWorkSources).map(([id, bundled]) => ({
     kind: 'workSource', id, name: bundled.name, listed: false, installSource: id, official: true,
@@ -107,56 +111,36 @@ async function workSourceSettings(root: string): Promise<WorkSourceSetting[]> {
 export async function readPluginSettings(root: string, checks: readonly ProjectReadiness[] = [], options: ScannerInstallOptions = {}): Promise<PluginSettings> {
   try {
     const [proposal, modules, workSources, config] = await Promise.all([
-      discoverScanners(root, options), configuredScannerModules(root, options), workSourceSettings(root), readGromaConfig(root),
+      discoverScanners(root, options), configuredScannerModules(root, options), workSourceSettings(root, options), readGromaConfig(root),
     ])
     const state = scannerSettingsState(proposal, modules, checks)
-    return { ...state, automaticUpdates: config.automaticUpdates !== false, plugins: [...state.plugins, ...workSources] }
+    return { ...state, automaticUpdates: config.automaticUpdates === true, plugins: [...state.plugins, ...workSources] }
   } catch (error) {
-    return { automaticUpdates: true, plugins: [], notice: { tone: 'error', message: error instanceof Error ? error.message : String(error) }, limits: [] }
+    return { automaticUpdates: false, plugins: [], notice: { tone: 'error', message: error instanceof Error ? error.message : String(error) }, limits: [] }
   }
 }
 
 export async function changePluginSettings(root: string, action: PluginSettingsAction, options: ScannerInstallOptions = {}): Promise<void> {
   switch (action.action) {
     case 'automatic-updates': await updateGromaConfig(root, config => ({ ...config, automaticUpdates: action.enabled })); return
-    case 'add': await addPlugin(root, action.source, options); return
     case 'remove': await removePlugin(root, action.id); return
-    case 'restore': await restorePlugin(root, action.id, options); return
-    case 'update': await updatePlugin(root, action.id, action.source, options); return
     case 'retry': return
-    case 'install-recommended': await installRecommended(root, options); return
-    case 'install-missing': {
-      const { failed } = await restoreMissingPlugins(root, undefined, options)
-      if (failed.length) throw restoreFailure(failed)
-      return
-    }
-    case 'install': {
-      const item = (await readPluginSettings(root, [], options)).plugins.find(plugin => plugin.id === action.id)
-      if (!item?.installSource) throw new Error('This plugin is no longer offered. Review the current plugin list.')
-      await addPlugin(root, item.installSource, options)
-    }
+    default: await executePluginChange(root, action, options)
   }
 }
 
-/** Adds every recommended scanner, keeping those that install when another fails. */
-async function installRecommended(root: string, options: ScannerInstallOptions) {
-  const settings = await readPluginSettings(root, [], options)
-  const errors: string[] = []
-  for (const item of settings.plugins) {
-    if (item.kind !== 'scanner' || item.listed || !item.installSource) continue
-    try { await addPlugin(root, item.installSource, options) }
-    catch (error) { errors.push(`${item.id}: ${error instanceof Error ? error.message : String(error)}`) }
-  }
-  if (errors.length) throw new Error(errors.join('\n'))
+function actionRecord(input: unknown): Record<string, unknown> {
+  if (!input || typeof input !== 'object') throw new Error('Plugin action required')
+  return input as Record<string, unknown>
 }
 
 export function parsePluginSettingsAction(input: unknown): PluginSettingsAction {
-  if (!input || typeof input !== 'object') throw new Error('Plugin action required')
-  const value = input as Record<string, unknown>
+  const value = actionRecord(input)
   const action = value.action
   if (action === 'automatic-updates' && typeof value.enabled === 'boolean') return { action, enabled: value.enabled }
   if (action === 'retry' || action === 'install-recommended' || action === 'install-missing') return { action }
   if (action === 'add' && typeof value.source === 'string') return { action, source: value.source }
+  if (action === 'install-selected' && stringArray(value.ids)) return { action, ids: value.ids }
   if (typeof value.id !== 'string') throw new Error('Plugin id required')
   if (action === 'update' && (value.source === undefined || typeof value.source === 'string')) return { action, id: value.id, source: value.source }
   if (action === 'install' || action === 'restore' || action === 'remove') return { action, id: value.id }

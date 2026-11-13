@@ -1,6 +1,8 @@
 import lockup from '../atoms/lockup.svg' with { type: 'text' }
 import packageJson from '../../../../package.json' with { type: 'json' }
 
+import type { PluginChangeProposal } from '../../../plugins/approval.ts'
+import { renderPluginProposal } from '../plugin-confirmation.ts'
 import type { ScannerDiscovery } from '../../../scanner/modules/discovery.ts'
 import { pluginSelection, pluginSelectionScript } from './plugins.ts'
 import { restoreContent, restoreCss, restoreScript, type RestoreRow } from './restore.ts'
@@ -15,6 +17,8 @@ type GromaDirectory = GromaInitResult['directory']
 
 interface SetupPage {
   projectName: string
+  csrf?: string
+  approval?: PluginChangeProposal
   directory?: GromaDirectory
   initialized: boolean
   firstRun: boolean
@@ -251,6 +255,7 @@ function directoryField(directory: GromaDirectory | undefined): string {
 
 function setupContent(input: SetupPage): string {
   const error = input.error === undefined ? '' : `<p class="error" role="alert">${escaped(input.error)}</p>`
+  if (input.approval !== undefined) return `${error}${renderPluginProposal(input.approval)}<form method="post" action="/plugin-confirm"><input type="hidden" name="proposal" value="${escaped(input.approval.id)}"><button type="submit">Approve and install</button><button type="submit" formaction="/plugin-cancel">Cancel</button></form>`
   if (input.restore !== undefined) return restoreContent(input.restore, error)
   if (input.proposal !== undefined) {
     return `<h1>Set up plugins</h1>${error}`
@@ -293,7 +298,7 @@ function progressContent(progress: StartupProgress): string {
 
 function pageView(input: SetupPage): string {
   if (input.error === undefined && input.progress !== undefined) return input.firstRun ? 'first-scan' : 'loading'
-  if (input.proposal !== undefined) return 'scanners'
+  if (input.approval !== undefined || input.proposal !== undefined) return 'scanners'
   if (input.restore !== undefined) return 'restore'
   if (!input.initialized) return 'setup'
   if (input.error !== undefined) return 'error'
@@ -312,7 +317,7 @@ export function renderSetupPage(input: SetupPage): string {
     + `<main data-view="${view}" data-first-run="${input.firstRun}"${loading ? ' aria-busy="true"' : ''}><header>`
     + `<div class="brand">${lockup}<span class="header-project" title="${escaped(input.projectName)}">${escaped(input.projectName)}</span></div>`
     + `<span class="version">v${escaped(packageJson.version)}</span></header><p id="request-error" class="error" role="alert" hidden></p>`
-    + `<section id="startup-content"${loading ? ' hidden' : ''}>${view === 'setup' || view === 'scanners' ? steps : ''}${setupContent(input)}</section>`
+    + `<section id="startup-content"${loading ? ' hidden' : ''}>${view === 'setup' || view === 'scanners' ? steps : ''}${setupContent(input).replace(/<form\b([^>]*)>/g, `<form$1><input type="hidden" name="csrf" value="${escaped(input.csrf ?? '')}">`)}</section>`
     + `<section id="startup-progress"${loading ? '' : ' hidden'}>${progressContent(input.progress ?? { phase: 'preparing-viewer' })}</section></main>`
     + `<span class="sr-only" role="status" aria-live="polite" data-announcement></span><script>${script}</script></body></html>`
 }

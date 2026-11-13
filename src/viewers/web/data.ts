@@ -1,3 +1,4 @@
+import type { PluginChangeProposal } from '../../plugins/approval.ts'
 import type { PluginSettings, PluginSettingsAction } from '../../plugins/settings-model.ts'
 import type { AcceptInput, AddInput, DraftInput, EditArchitectureInput, RemoveInput } from '../../authoring.ts'
 import type { WorkItemDetails } from '../../types.ts'
@@ -10,6 +11,8 @@ import type { TaskDiffPayload } from '../source/diff.ts'
 export interface WebDataSource {
   readPluginSettings?(checkUpdates?: boolean): Promise<PluginSettings>
   changePluginSettings?(action: PluginSettingsAction): Promise<PluginSettings>
+  proposePluginChange?(action: PluginSettingsAction): Promise<PluginChangeProposal>
+  confirmPluginChange?(id: string): Promise<PluginSettings>
   onPluginSettings?: (state: PluginSettings) => void
   readWorld(revision?: string, from?: string): Promise<WebPayload>
   readRevisions(): Promise<WebRevision[]>
@@ -35,10 +38,11 @@ async function responseJson<T>(path: string): Promise<T> {
   return response.json() as Promise<T>
 }
 
-async function send(path: string, body: unknown): Promise<void> {
+async function send(path: string, body: unknown): Promise<Response> {
+  const session = await responseJson<{ csrf: string }>('/session')
   const response = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Groma-CSRF': session.csrf },
     body: JSON.stringify(body),
   })
   if (!response.ok) {
@@ -47,6 +51,7 @@ async function send(path: string, body: unknown): Promise<void> {
       : await response.text()
     throw new Error(message)
   }
+  return response
 }
 
 function selected(path: string, values: Record<string, string | undefined>): string {
@@ -58,18 +63,22 @@ function selected(path: string, values: Record<string, string | undefined>): str
 }
 
 /** The writers of a live map. Without them the map offers no write controls, as for a published one. */
-const liveWriters: Pick<WebDataSource, 'readPluginSettings' | 'changePluginSettings' | 'draft' | 'add' | 'remove' | 'edit' | 'accept'> = {
+const liveWriters: Pick<WebDataSource, 'readPluginSettings' | 'changePluginSettings' | 'proposePluginChange' | 'confirmPluginChange' | 'draft' | 'add' | 'remove' | 'edit' | 'accept'> = {
   readPluginSettings: checkUpdates => responseJson(checkUpdates ? '/plugin-settings?updates' : '/plugin-settings'),
   async changePluginSettings(action) {
-    const response = await fetch('/plugin-settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(action) })
-    if (!response.ok) throw new Error(await response.text())
-    return response.json() as Promise<PluginSettings>
+    return (await send('/plugin-settings', action)).json() as Promise<PluginSettings>
   },
-  draft: input => send('/draft', input),
-  add: input => send('/add', input),
-  remove: input => send('/remove', input),
-  edit: input => send('/edit', input),
-  accept: input => send('/accept', input),
+  async proposePluginChange(action) {
+    return (await send('/plugin-proposal', action)).json() as Promise<PluginChangeProposal>
+  },
+  async confirmPluginChange(id) {
+    return (await send('/plugin-confirm', { id })).json() as Promise<PluginSettings>
+  },
+  draft: async input => { await send('/draft', input) },
+  add: async input => { await send('/add', input) },
+  remove: async input => { await send('/remove', input) },
+  edit: async input => { await send('/edit', input) },
+  accept: async input => { await send('/accept', input) },
 }
 
 function liveDataSource(readOnly: boolean): WebDataSource {

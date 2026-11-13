@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import manifest from '../plugins/scanners/typescript/package.json'
 import { scanTypeScriptSource } from '../plugins/scanners/typescript/src/scan.ts'
 import { loadArchitecture } from '../src/architecture-reader.ts'
@@ -26,7 +26,7 @@ async function repository(): Promise<string> {
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'fixture', bin: 'src/caller.ts' }))
   const git = Bun.spawn(['git', 'init', '--quiet'], { cwd: root, stdout: 'ignore', stderr: 'pipe' })
   expect(await git.exited, await new Response(git.stderr).text()).toBe(0)
-  await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+  await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
   return root
 }
 
@@ -61,12 +61,12 @@ export function run(actions) {
     expect(rows[0]!.description.split(': ')[1]?.split(', ')).toEqual(['cancelled', 'error', 'merged'])
     expect(rows[0]!.description.match(/callbacks/g)).toHaveLength(1)
     expect(inferRelationships([reversed, observation], owners)).toEqual(rows)
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const first = await loadAnnotatedArchitecture(root)
     expect(first.relationships[0]!.connections?.[0]?.description).toBe(rows[0]!.description)
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     expect(await loadAnnotatedArchitecture(root)).toEqual(first)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('operation resolution follows aliases but preserves executable wrappers and concrete callback bindings', async () => {
@@ -100,7 +100,7 @@ test.concurrent('operation resolution follows aliases but preserves executable w
       .flatMap(invocation => invocation.targets.map(id => wrappedFiles.get(id)))
     expect(callerTargets).toContain('src/wrapper.ts')
     expect(callerTargets).not.toContain('src/provider.ts')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a call to an overloaded function reaches its implementation and binds the callbacks it supplies', async () => {
@@ -118,7 +118,7 @@ export function run(actions: { deliver(value: string): string }): string {
     const callback = observation.invocations!.find(invocation => invocation.member === 'deliver')!
     expect(callback.targets.map(id => operations.get(id))).toEqual(['src/provider.ts'])
     expect(callback.binding?.file).toBe('src/caller.ts')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('uncertain alternatives prevent emission even when one known callback target remains', async () => {
@@ -136,7 +136,7 @@ run({ deliver: choose ? send : unknown })
     expect(callback.targets).toHaveLength(1)
     expect(callback.unresolved).toBeTrue()
     expect(inferRelationships([observation], new Map(observation.files.map(file => [file.file, file.file])))).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('repeated forwarding preserves distinct concrete bindings without multiplying identical evidence', async () => {
@@ -166,14 +166,14 @@ forward5({ deliver: unknown })
     expect(callbacks.map(callback => callback.unresolved)).toEqual([false, false, true])
     expect(inferRelationships([observation], new Map(observation.files.map(file => [file.file, file.file])))
       .map(row => row.target)).toEqual(['src/provider.ts', 'src/wrapper.ts'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('scan stores selected interactions without analysis graphs and reload projects current owners', async () => {
   const root = await repository()
   try {
     await cp(path.resolve(import.meta.dir, '../test/fixtures/curation/groma/systems/shop'), path.join(root, 'groma/systems/shop'), { recursive: true })
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const raw = await loadAnnotatedArchitecture(root)
     const source = owner(raw, 'worker'), target = owner(raw, 'provider')
     expect(raw.relationships.map(row => [row.source, row.target])).toEqual([[source.id, target.id]])
@@ -183,9 +183,9 @@ test.concurrent('scan stores selected interactions without analysis graphs and r
     await editArchitecture(root, { id: target.id, parent: 'shop-shop' })
     await editArchitecture(root, { id: source.id, combine: [target.id] })
     expect((await loadAnnotatedArchitecture(root)).relationships).toEqual([])
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     expect((await loadAnnotatedArchitecture(root)).relationships).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 for (const destination of ['stored', 'literal'] as const) {
@@ -197,7 +197,7 @@ for (const destination of ['stored', 'literal'] as const) {
       await writeFile(path.join(root, 'src/api.ts'), "export { deliver as send } from './(tabs)/index.tsx'\n")
       await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'fixture' }))
       await cp(path.resolve(import.meta.dir, '../test/fixtures/curation/groma/systems/shop'), path.join(root, 'groma/systems/shop'), { recursive: true })
-      await scanRepository(root)
+      await scanRepository(root, pluginFixtureOptions(root))
       const before = await loadAnnotatedArchitecture(root)
       const source = owner(before, 'worker')
       const connections = before.relationships.flatMap(row => row.connections ?? [])
@@ -215,14 +215,14 @@ for (const destination of ['stored', 'literal'] as const) {
       const after = await loadAnnotatedArchitecture(root)
       expect(owner(after, 'worker').parent).toBe('shop-shop')
       expect(after.relationships.flatMap(row => row.connections ?? [])).toEqual(connections)
-    } finally { await rm(root, { recursive: true, force: true }) }
+    } finally { await closePluginFixture(root) }
   })
 }
 
 test.concurrent('editing a derived interaction takes authorship and preserves its meaning through rescans', async () => {
   const root = await repository()
   try {
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const source = owner(await loadAnnotatedArchitecture(root), 'worker')
     const example = '```markdown\n## Relationships\nA relationship example.\n```'
     await editArchitecture(root, { id: source.id, overview: `Explains the interaction.\n\n${example}` })
@@ -230,40 +230,40 @@ test.concurrent('editing a derived interaction takes authorship and preserves it
     const records = await loadArchitecture(root)
     const document = records.documents.find(item => (item.frontmatter.groma as { id: string }).id === source.id)!
     expect(document.body).toContain(example)
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const after = await loadAnnotatedArchitecture(root)
     expect(after.relationships).toHaveLength(1)
     expect(after.relationships[0]!.connections).toEqual([expect.objectContaining({ ...ends, authored: true })])
     await writeFile(path.join(root, 'src/worker.ts'), 'export function run(): void {}\n')
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     expect((await loadAnnotatedArchitecture(root)).relationships).toEqual(after.relationships)
     await expect(addRelation(root, { ...ends, description: 'Another', technology: 'Callback' })).rejects.toThrow()
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('draft interactions stay separate from current derivation and require explicit acceptance', async () => {
   const root = await repository()
   try {
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     await addRelation(root, { ...ends, description: 'Publishes the result', technology: 'Callback' }, 'draft')
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     const before = (await loadAnnotatedArchitecture(root)).relationships[0]!
     expect(new Set(before.connections?.map(row => `${row.authored}:${row.status}`))).toEqual(new Set(['false:stable', 'true:draft']))
     await acceptRelation(root, ends)
     const after = (await loadAnnotatedArchitecture(root)).relationships[0]!
     expect(after.connections).toEqual([expect.objectContaining({ ...ends, authored: true, status: 'stable' })])
     await expect(removeRelation(root, ends)).rejects.toThrow()
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('removing the observed callback removes only the derived interaction', async () => {
   const root = await repository()
   try {
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     await writeFile(path.join(root, 'src/worker.ts'), 'export function run(): void {}\n')
-    await scanRepository(root)
+    await scanRepository(root, pluginFixtureOptions(root))
     expect((await loadAnnotatedArchitecture(root)).relationships).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a supplied member overwritten by the receiver does not retain its original provider claim', async () => {
@@ -278,7 +278,7 @@ export function run(actions: { deliver(value: string): string }): string {
     const observation = (await scanTypeScriptSource(root, await typescriptFiles(root)))!
     expect(observation.invocations!.find(invocation => invocation.member === 'deliver')?.unresolved).toBeTrue()
     expect(inferRelationships([observation], new Map(observation.files.map(file => [file.file, file.file])))).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('changing a supplied object before passing it leaves the provider unresolved', async () => {
@@ -294,7 +294,7 @@ run(actions)
     const observation = (await scanTypeScriptSource(root, await typescriptFiles(root)))!
     expect(observation.invocations!.find(invocation => invocation.member === 'deliver')?.unresolved).toBeTrue()
     expect(inferRelationships([observation], new Map(observation.files.map(file => [file.file, file.file])))).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('all known alternatives within one binding must have the same provider owner', async () => {
@@ -315,5 +315,5 @@ run({ deliver: choose ? send : wrap })
     expect(inferRelationships([observation], owners)).toEqual([])
     owners.set('src/wrapper.ts', 'src/provider.ts')
     expect(inferRelationships([observation], owners).map(row => row.target)).toEqual(['src/provider.ts', 'src/wrapper.ts'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

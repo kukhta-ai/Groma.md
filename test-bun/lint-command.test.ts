@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { writeGromaConfig } from '../src/config.ts'
 
 const cli = path.resolve(import.meta.dir, '../src/cli.ts')
 const fixtures = path.resolve(import.meta.dir, '../test/fixtures')
 
 async function command(root: string, ...args: string[]) {
-  const child = Bun.spawn([process.execPath, cli, ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const child = Bun.spawn([process.execPath, cli, '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, ...args], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
   const [code, out, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
   return { code, out, error }
 }
@@ -33,7 +33,7 @@ test.concurrent('lint checks fresh scanner evidence and reports failures without
     await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'lint-fixture', bin: 'src/ready-a.ts' }))
     const git = Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'pipe' })
     expect(await git.exited).toBe(0)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const before = await snapshot(path.join(root, 'groma'))
     const duplicates = await command(root, 'lint')
     expect(duplicates.code, duplicates.error).toBe(1)
@@ -51,7 +51,7 @@ test.concurrent('lint checks fresh scanner evidence and reports failures without
     await mkdir(plugin)
     await writeFile(path.join(plugin, 'package.json'), JSON.stringify({ name: 'broken', version: '1.0.0', groma: { scanner: { id: 'broken', entry: './index.js', include: ['**/*.ts'] } } }))
     await writeFile(path.join(plugin, 'index.js'), `export default { id: 'broken', scan() { throw new Error('lint-fixture-failure') } }`)
-    await addScanner(root, plugin)
+    await addFixtureScanner(root, plugin)
     const withFailure = await snapshot(path.join(root, 'groma'))
     const failed = await command(root, 'lint')
     expect(failed.code).toBe(1)
@@ -63,5 +63,5 @@ test.concurrent('lint checks fresh scanner evidence and reports failures without
     expect((await command(root, 'lint')).code).toBe(0)
     expect((await command(root, 'duplicates')).code).toBe(1)
     expect(await snapshot(path.join(root, 'groma'))).toEqual(empty)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

@@ -1,19 +1,17 @@
 import { EMPTY_WORK_SOURCE, type WorkSource, type WorkSourcePlugin } from '@groma/work-source'
-import { backlogPlugin } from '@groma/work-source-backlog'
-import { installBacklogCli } from './backlog-cli.ts'
+import { createBacklogPlugin } from '@groma/work-source-backlog'
+import { approvedBacklogCommand } from './backlog-tool.ts'
+import type { PluginTrustOptions } from '../plugins/trust.ts'
 import { readGromaConfig, type ConfiguredWorkSource } from '../config.ts'
 
 /** A work source that ships inside groma.md, with the tool it reads through. */
 export interface BundledWorkSource {
   name: string
-  plugin: WorkSourcePlugin
-  /** Installs the current tool, or updates an installed one when `upgrade` is set. */
-  installTool(upgrade: boolean): Promise<void>
 }
 
 /** The work sources that ship inside groma.md, by the id config.json lists them with. */
 export const bundledWorkSources: Readonly<Record<string, BundledWorkSource>> = {
-  backlog: { name: 'Backlog.md', plugin: backlogPlugin, installTool: installBacklogCli },
+  backlog: { name: 'Backlog.md' },
 }
 
 /** The bundled work source with this id; config.json can name no other. */
@@ -39,19 +37,20 @@ export type WorkSourceSelection =
   | WorkSourceSelectionFields & { status: 'missing' | 'blocked' }
 
 /** Reports whether the work source config.json lists can run here. Without an entry no tool runs. */
-export async function checkWorkSourceReadiness(root: string): Promise<WorkSourceSelection | undefined> {
+export async function checkWorkSourceReadiness(root: string, options: PluginTrustOptions = {}): Promise<WorkSourceSelection | undefined> {
   const selected = (await readGromaConfig(root)).workSources[0]
   if (!selected) return undefined
   const base = { ...selected, name: bundledWorkSources[selected.id]?.name ?? selected.id }
   try {
     const bundled = bundledWorkSource(selected.id)
-    const readiness = await bundled.plugin.readiness()
+    const plugin = createBacklogPlugin(() => approvedBacklogCommand(root, options))
+    const readiness = await plugin.readiness()
     if (readiness.status === 'missing') return { ...base, status: 'missing', message: `${bundled.name} CLI is not installed.` }
     const installed = { ...base, installed: readiness.version }
-    if (Bun.semver.order(readiness.version, selected.version) < 0) {
-      return { ...installed, status: 'missing', message: `${bundled.name} CLI ${readiness.version} is older than ${selected.version}.` }
+    if (readiness.version !== selected.version) {
+      return { ...installed, status: 'missing', message: `${bundled.name} CLI ${readiness.version} does not match ${selected.version}.` }
     }
-    return { ...installed, status: 'found', plugin: bundled.plugin, message: '' }
+    return { ...installed, status: 'found', plugin, message: '' }
   } catch (error) {
     return { ...base, status: 'blocked', message: error instanceof Error ? error.message : String(error) }
   }
@@ -77,8 +76,8 @@ export interface WorkSourceSession extends WorkSource {
  * A session serves one watcher: call `watch` once. A second call would replace the listener and leave the
  * first subscription open. A supplied source is used as it is and never reconfigured.
  */
-export async function workSourceSession(root: string, supplied?: WorkSource): Promise<WorkSourceSession> {
-  let selection = supplied ? undefined : await checkWorkSourceReadiness(root)
+export async function workSourceSession(root: string, supplied?: WorkSource, options: PluginTrustOptions = {}): Promise<WorkSourceSession> {
+  let selection = supplied ? undefined : await checkWorkSourceReadiness(root, options)
   let source = supplied ?? activeSource(root, selection)
   let signature = selectionSignature(selection)
   let subscription: ReturnType<WorkSource['watch']> | undefined
@@ -86,7 +85,7 @@ export async function workSourceSession(root: string, supplied?: WorkSource): Pr
   let pending = Promise.resolve()
   async function refresh() {
     if (supplied) return
-    selection = await checkWorkSourceReadiness(root)
+    selection = await checkWorkSourceReadiness(root, options)
     const next = selectionSignature(selection)
     if (next === signature) return
     await subscription?.close()

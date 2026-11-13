@@ -1,12 +1,12 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 
 import os from 'node:os'
 import path from 'node:path'
 
 import { createScanObservation, type ScanOperation } from '@groma/scanner'
 
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import manifest from '../plugins/scanners/typescript/package.json'
 import { scanTypeScriptSource } from '../plugins/scanners/typescript/src/scan.ts'
 import { copiesOf, detectDuplicatedLogic, findingsForOwner, prepareArchitectureFindings, rememberArchitectureFindings } from '../src/architecture-findings.ts'
@@ -66,7 +66,7 @@ async function scannedFixture(fixture = 'duplicated-logic', bin = 'src/ready-a.t
   await cp(path.join(fixtures, fixture), path.join(root, 'src'), { recursive: true })
   await writeFile(path.join(root, 'package.json'), JSON.stringify({ name: 'fixture', bin }))
   await gitInit(root)
-  await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+  await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
   return root
 }
 
@@ -187,7 +187,7 @@ test.concurrent('TypeScript operations match after renaming locals and keep lite
     expect(byName.get('canStart')?.tokens).not.toEqual(byName.get('readyWithoutStatus')?.tokens)
     expect(byName.get('canStart')?.startLine).toBeGreaterThan(0)
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await closePluginFixture(root)
   }
 })
 
@@ -202,7 +202,7 @@ test.concurrent('callbacks written in an object passed to a call or constructor 
     // The wrapped spellings, such as `subscribe(({ next }))` or `subscribe({ next } as Observer)`, are callbacks too.
     expect(findings[0]!.instances.map(instance => instance.startLine)).toEqual([52, 58])
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await closePluginFixture(root)
   }
 })
 
@@ -214,14 +214,14 @@ test.concurrent('bodies that differ in one operator, grouping or keyword are not
     // a `#name` or a destructured property name.
     expect(findings.map(finding => [finding.match, namesOf(finding)])).toEqual([['exact', ['constructor', 'constructor']]])
   } finally {
-    await rm(root, { recursive: true, force: true })
+    await closePluginFixture(root)
   }
 })
 
 test.concurrent('scan remembers findings for owners without writing relationships', async () => {
   const root = await scannedFixture()
   try {
-    const summary = await scanRepository(root)
+    const summary = await scanRepository(root, pluginFixtureOptions(root))
     expect(summary.findings).toBeGreaterThan(0)
     const world = await loadAnnotatedArchitecture(root)
     expect(world.findings?.length).toBe(summary.findings)
@@ -233,7 +233,7 @@ test.concurrent('scan remembers findings for owners without writing relationship
     expect(inspected.findings.some(finding => finding.instances.some(instance => instance.file.endsWith('ready-b.ts')))).toBeTrue()
   } finally {
     rememberArchitectureFindings(root, [])
-    await rm(root, { recursive: true, force: true })
+    await closePluginFixture(root)
   }
 })
 

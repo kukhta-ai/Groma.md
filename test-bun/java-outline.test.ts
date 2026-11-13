@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import { cp, mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { CodeSymbol } from '@groma/scanner'
 import { buildPackage } from '../plugins/scanners/java/build.ts'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { readCodeStructure } from '../src/viewers/source/structure.ts'
 
 test.concurrent('a component outlines its Java file beside a TypeScript file under the Java visibility rules', async () => {
@@ -18,11 +18,11 @@ test.concurrent('a component outlines its Java file beside a TypeScript file und
     await cp(path.resolve(import.meta.dir, '../test/fixtures/java-outline'), root, { recursive: true })
     const git = Bun.spawn(['git', 'init', '--quiet'], { cwd: root, stdout: 'ignore', stderr: 'pipe' })
     expect(await git.exited, await new Response(git.stderr).text()).toBe(0)
-    await addScanner(root, artifact)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual([...new Set(component.code.map(reference => reference.file))])
     const symbol = ({ name, line, visibility, entry }: CodeSymbol) => [name, line, visibility, entry]
     const outline = (file: string) => files.find(candidate => candidate.file.endsWith(file))!.declarations.map(declaration => [

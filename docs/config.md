@@ -1,100 +1,84 @@
 # Project configuration
 
-`<groma-root>/config.json` is the project's one groma.md configuration. Commit it:
-colleagues who pull the project get the same selected plugins and project settings.
+`<groma-root>/config.json` selects the project's plugins and settings. Commit it
+so colleagues select the same sources. This file grants no permission to execute
+code. Each computer separately approves executable content outside Git.
 
 ```json
 {
   "scanners": [
-    { "id": "typescript", "source": "@groma/scanner-typescript@0.4.2", "include": ["**/*.ts"] }
+    { "id": "typescript", "source": "@groma/scanner-typescript@0.2.4", "include": ["**/*.ts"] }
   ],
-  "workSources": [
-    { "id": "backlog", "version": "1.53.0" }
-  ],
+  "workSources": [{ "id": "backlog", "version": "1.55.3" }],
   "exclude": ["/test/"],
   "useGitignore": true,
-  "automaticUpdates": true
+  "automaticUpdates": false
 }
 ```
 
-## Upgrading from scanners.json
+## Plugins and execution approval
 
-On first use, when `config.json` is absent, Groma converts an existing
-`scanners.json`. Scanner sources, settings, include/exclude lists and global
-options are preserved. If the Backlog.md CLI is already installed and no scanner
-uses the `backlog` ID, its version is recorded too; nothing is installed or
-initialized. An existing scanner keeps that ID. Groma removes the old file after
-saving `config.json`.
+Ids are lowercase kebab-case and unique across sections. `scanners` entries have
+`id`, `source`, `include`, and optionally `settings`, `exclude` and `integrity`.
+`workSources` contains at most one entry, currently `backlog`, with an exact
+`version` and optional `integrity`.
 
-An existing `config.json` always wins. Removing Backlog.md later stays effective;
-the conversion does not run again.
+An npm source records an exact `package@version`. A Git source is
+`git+https://repository#tag-or-commit`; approval resolves a tag to its exact
+commit and records that commit. A local `./path` identifies a runnable package.
+Approval captures its complete content into a separate retained directory.
+Changing the original local package requires an explicit **Update** and new
+approval. A selected Backlog version is exact; Groma uses its approved managed
+SDK, preserving any unrelated global Backlog installation.
 
-## Plugins
+Add, Install, Restore and Update stage metadata and bytes with package lifecycle
+scripts disabled. They show source, package version, Git commit where applicable,
+and a SHA-256 content digest. Confirming approves those captured bytes. Declining,
+expiration, a changed project selection or a different browser session prevents
+activation. Proposals last five minutes and can be confirmed once.
 
-Each section lists the plugins of one kind. No plugin runs unless the file lists
-it. Ids are lowercase kebab-case; one id names one plugin across all sections.
+The loader verifies the external approval and complete content digest immediately
+before importing a scanner. Every managed Backlog operation verifies the selected
+SDK before spawning its executable. Modified content is refused. Approved code
+runs with your account's privileges; this mechanism is not a sandbox.
 
-- `scanners`: `id`, `source` and `include`, optionally `settings` and `exclude`.
-  [Scanner settings](scanners/setup.md) describes them.
-- `workSources`: at most one. groma.md bundles Backlog.md, id `backlog`.
+A project `integrity` is an optional additional constraint. Without it, execution
+still requires a unique external approval for the exact source identity and a
+matching complete content digest. This permits one shared configuration with
+separately approved platform-specific SDKs. Duplicate external identities fail.
+See [plugin approval and CI](scanners/trust.md) for the external authority format.
 
-A plugin with a `source` is downloaded. An npm `package@version` records the
-release last selected; scanning refreshes it automatically. A
-`git+https://repository#tag-or-commit` keeps its declared revision (a tag is
-recorded as its commit), and a local `./path` runs from the repository.
+There is no automatic `scanners.json` migration or adoption of an ambient global
+Backlog command. Select plugins through the normal explicit setup flow.
 
-A plugin without a `source` is bundled: it ships inside groma.md and has its
-version. The Backlog.md work source reads tasks through the Backlog.md CLI; its
-`version` is the lowest CLI version the project uses.
+## Optional update checks
 
-`exclude` and `useGitignore` apply to every scanner; see
-[Scanners](scanners/index.md).
+`automaticUpdates` defaults to `false`. **Check for updates automatically** in
+Plugins (web checkbox or terminal `t`) enables release metadata checks. A check
+can report an available compatible stable npm release. It cannot install content,
+change `config.json`, import a new release or trigger a scan. File edits do not
+check npm. Explicit **Update** reviews and confirms the proposed release.
 
-## Automatic scanner updates
+Installed approved scanners keep working offline. A session owns at most one
+in-flight metadata check, and closing it cancels that check. Disabling checks
+while a request is pending prevents that result from being published.
 
-`automaticUpdates` defaults to `true`. Set it to `false` to disable background
-updates and their follow-up scan. The Plugins screen offers **Automatic updates**
-(web checkbox or terminal `t`). Explicit plugin update commands still work.
+## Restoring on another computer
 
-Scans and live terminal or web maps start with the scanner versions already on
-this computer. They check for newer compatible stable npm releases in the
-background, without waiting for registry access or a startup timeout. Offline
-scans keep using the installed versions.
+`groma plugin install` and the native Restore actions restore exact configured
+sources, never the newest compatible release. An existing external approval uses
+its retained SDK. If that directory was deleted, restoration requires its saved
+package manifest and frozen Bun lock; the rebuilt complete content must match the
+approved digest. Missing locks or changed bytes fail closed. A new computer must
+explicitly review the selected content or receive a separately reviewed external
+approval profile. A missing local source must be brought back by its author.
 
-After the updates finish, groma.md records the completed selections in
-`config.json` and runs the normal scan again. An open map refreshes from that
-scan through its ordinary architecture watcher. Opening Plugins checks again in
-the background, sharing any check already running in that session. Scanner settings and
-include/exclude lists stay as the project set them. Already installed releases
-are reused, and Git and local scanners keep their declared sources.
-
-Manual plugin changes also save against the current configuration after downloads,
-so another plugin change or settings edit is preserved. If the same scanner's
-selection changed during a manual update, Groma reports the conflict.
-
-Missing packages still need the normal plugin installation or restoration flow.
-
-## Restoring plugins on another computer
-
-When someone adds or updates a plugin, `config.json` records its version. A
-colleague who pulls then finds that plugin missing: a scanner whose package at
-the exact source is not on this computer, or a Backlog.md CLI that is not
-installed or is older than the listed version.
-
-Restoring selects the newest compatible npm scanner and records its release;
-Git scanners restore their declared commit. It installs the current Backlog.md
-CLI with the package manager groma.md was installed with, else the first of bun,
-npm and Homebrew on the PATH. A missing local scanner directory cannot be
-restored; bring it back yourself.
-
-- `groma web` opens on **Restore plugins** when a plugin is missing. **Restore**
-  restores each one with its own progress mark, then opens the map. A plugin it
-  cannot restore stays on the view with the reason. **Proceed without them**
-  opens the map read-only: no scan runs and nothing can be edited until
-  `groma web` starts again with every plugin present.
-- The `groma` welcome screen names the missing plugins.
-- `groma plugin install` restores them.
-- The plugins screen restores a missing plugin from its row.
+The authenticated web startup retains **Restore** and **Proceed without them**.
+Proceeding opens saved architecture read-only. Plugins offers individual and
+batch actions. A batch stages all its proposed content before approval and changes
+selections together. Metadata conflicts require reviewing a fresh proposal;
+authored selections are preserved. Removing a plugin keeps retained packages and
+saved architecture, but removes that selection from project configuration.
 
 ## Commands
 
@@ -108,13 +92,13 @@ groma plugin update backlog
 groma plugin remove backlog
 ```
 
-`add` takes a bundled plugin's id or a scanner source; a bare npm name selects
-the newest compatible stable release and records its exact version. `update`
-moves a scanner to its newest compatible release, or to the exact source given,
-and updates the Backlog.md CLI to its current release; both record the new
-version. An explicit npm version is eligible for automatic background updates unless
-`automaticUpdates` is false. `remove` keeps downloaded packages in the shared cache.
+Bare npm names select a compatible stable release and show the exact proposed
+version before consent. Scanner Update can also choose an exact version of the
+same package or a Git revision of the same repository. Backlog Update proposes
+the fork's pinned managed version, currently `1.55.3`. CLI interactive commands,
+the terminal Plugins page and authenticated web Plugins retain these operations.
+Unattended commands require matching previously reviewed external approval.
 
-The plugins screen, **Settings → Plugins** in `groma web` or `s` on the welcome
-screen, offers the same operations and lists the bundled plugins the project
-does not use yet, each with **Install**.
+`exclude` and `useGitignore` apply to scanners as described in
+[Scanners](scanners/index.md). [Plugin settings](scanners/setup.md) describes
+source detection, readiness and native controls.

@@ -21,12 +21,13 @@ for (const present of [false, true]) {
       await writeGromaConfig(root, { scanners: [{ id: 'local', source, include: ['**/*.local'] }], workSources: [] })
       const selection = await readFile(path.join(root, 'groma/config.json'), 'utf8')
       const architecture = await loadAnnotatedArchitecture(root)
-      const { failed } = await restoreMissingPlugins(root)
+      const { failed } = await restoreMissingPlugins(root, undefined, { approvalsFile: path.join(`${root}-trust`, 'approvals.json'),
+        cacheRoot: path.join(`${root}-trust`, 'cache'), confirm: async () => true })
       expect(failed.map(({ id }) => id)).toEqual(present ? [] : ['local'])
       expect(await readFile(path.join(root, 'groma/config.json'), 'utf8')).toBe(selection)
       const after = await loadAnnotatedArchitecture(root)
       expect(after.elements).toEqual(architecture.elements)
       expect(after.relationships).toEqual(architecture.relationships)
-    } finally { await rm(root, { recursive: true, force: true }) }
+    } finally { await rm(root, { recursive: true, force: true }); await rm(`${root}-trust`, { recursive: true, force: true }) }
   })
 }

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
+import { cp, mkdtemp, readFile, rm, writeFile, mkdir, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { exportWebViewer, type WebExportOptions } from '../src/viewers/web/export.ts'
@@ -9,7 +9,7 @@ import type { WebBootPayload } from '../src/viewers/web/payload.ts'
 const fixture = path.resolve(import.meta.dir, '../test/fixtures/source-view')
 async function publish(root: string, options: WebExportOptions = {}): Promise<WebBootPayload> {
   const output = path.join(root, 'site')
-  await (await exportWebViewer(root, output, options)).close()
+  await (await exportWebViewer(root, output, { ...options, ackSourceExport: true })).close()
   let json = ''
   await new HTMLRewriter().on('script#world', { text(chunk) { json += chunk.text } })
     .transform(new Response(await readFile(path.join(output, 'index.html'), 'utf8'))).text()
@@ -27,6 +27,15 @@ function expectNoWork(payload: WebBootPayload): void {
     expect(Object.keys(view.reads).sort()).toEqual(['code', 'sources'])
   }
 }
+
+test.concurrent('source export requires acknowledgement before creating output', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'groma-export-consent-'))
+  const output = path.join(root, 'site')
+  try {
+    await expect(exportWebViewer(root, output)).rejects.toThrow('--ack-source-export')
+    await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' })
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
 
 test.concurrent('working-tree export retains uncommitted source and contains one task-free snapshot', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'groma-export-tree-'))
@@ -77,7 +86,13 @@ test.concurrent('commit export and its one older-to-newer comparison use only bu
     expect((await createWebDataSource(single).readSource('orders', 'src/orders.ts', after)).source).toBe(newSource)
 
     // Naming the newer commit as the start still exports one comparison, from the older commit to the newer.
-    const boot = await publish(root, { from: after, revision: before })
+    const manifestFile = path.join(root, 'private-source-inventory.json')
+    const boot = await publish(root, { from: after, revision: before, sourceManifest: manifestFile })
+    const inventory = JSON.parse(await readFile(manifestFile, 'utf8')) as unknown
+    expect(inventory).toMatchObject({ schemaVersion: 1, snapshots: expect.arrayContaining([
+      { revision: before, files: expect.arrayContaining([{ path: 'src/orders.ts', content: oldSource }]) },
+      { revision: after, files: expect.arrayContaining([{ path: 'src/orders.ts', content: newSource }]) },
+    ]) })
     expectNoWork(boot)
     expect(boot.comparison?.from?.id).toBe(before)
     expect(boot.revision?.id).toBe(after)
