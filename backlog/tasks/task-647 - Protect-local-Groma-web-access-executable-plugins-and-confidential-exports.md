@@ -4,7 +4,7 @@ title: Protect local Groma web access executable plugins and confidential export
 status: In Progress
 assignee: []
 created_date: '2026-11-13 06:09'
-updated_date: '2026-11-13 16:08'
+updated_date: '2026-11-13 16:21'
 labels: []
 dependencies: []
 modified_files:
@@ -131,6 +131,8 @@ Recovered source passes TypeScript7.1.0-beta and native Bun security regressions
 CI43456996149 on immutable ad95fd4: Linux full repository check passes1005 viewer tests with24 standard conditional skips; two existing Java registered-scanner tests fail because the maintainer build copy rewrites jlink internal relative symlinks into absolute links outside the package. Plugin confinement correctly rejects them. Routine correction plan: preserve relative symlink bytes when copying the built Java runtime into its development scanner root; keep integrity rejection unchanged. Existing java-duplicates and java-outline tests already detect the supported-flow regression, so no duplicate test is added. Verify cp/integrity behavior with owned synthetic scratch, then repeat the unchanged full CI on all three platforms. Local heavy compiler/dependency provisioning remains blocked below10GiB capacity.
 
 Focused Bun1.4.4 owned-scratch probe reproduces the original cp behavior: the copied Java-style legal link escapes the package and is rejected. With verbatimSymlinks:true the copied root has exactly the original content digest; changing the linked target changes that digest. Integrity code and confinement checks are unchanged. Existing Java registered-scanner failures provide the end-to-end regression cases; full platform CI still required.
+
+Full Linux CIcd73635 again reaches1005 passed24 conditional skips2 Java registration failures. The development build copy is now correct, but each of the two existing tests independently copies GROMA_TEST_JAVA_PACKAGE into its artifact root with default cp, rewriting the same internal links before consent. Extend the same verbatim link preservation to these two fixture copies; retain all existing behavioral assertions and source-confinement checks. Standalone/npm build checks, fresh-checkout scanner-package checks and C# worker checks already passed on cd73635. Full revised platform CI remains required.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done
