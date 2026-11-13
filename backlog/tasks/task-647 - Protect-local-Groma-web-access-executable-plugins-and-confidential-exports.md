@@ -4,7 +4,7 @@ title: Protect local Groma web access executable plugins and confidential export
 status: In Progress
 assignee: []
 created_date: '2026-11-13 06:09'
-updated_date: '2026-11-13 06:31'
+updated_date: '2026-11-13 16:08'
 labels: []
 dependencies: []
 modified_files:
@@ -98,6 +98,7 @@ modified_files:
   - test-bun/compiled-scanner.test.ts
   - test-bun/react-scanner.test.ts
   - test-bun/code-outline.test.ts
+  - plugins/scanners/java/build.ts
 ordinal: 706000
 ---
 
@@ -126,6 +127,10 @@ Cold independent review reproduced a web-confirm integration bug: same-path loca
 Forced reconfiguration also refreshes the live work-source consumer after web approval, matching native session.change behavior.
 
 Recovered source passes TypeScript7.1.0-beta and native Bun security regressions. Six preserved fixture files pass64/64 with the upstream runner settings; production web-confirm regression passes15/15 with server access. Full check retains1031 viewer tests:939 pass64 skip28 fail, all remaining failures require unavailable Java/Swift/COBOL/JVM tooling; the full gate is NOT passed. Cold independent review found web-confirm stale registry and verified its fix. Source freeze checkpoint supports remote CI; architecture curation and integration qualification remain pending.
+
+CI43456996149 on immutable ad95fd4: Linux full repository check passes1005 viewer tests with24 standard conditional skips; two existing Java registered-scanner tests fail because the maintainer build copy rewrites jlink internal relative symlinks into absolute links outside the package. Plugin confinement correctly rejects them. Routine correction plan: preserve relative symlink bytes when copying the built Java runtime into its development scanner root; keep integrity rejection unchanged. Existing java-duplicates and java-outline tests already detect the supported-flow regression, so no duplicate test is added. Verify cp/integrity behavior with owned synthetic scratch, then repeat the unchanged full CI on all three platforms. Local heavy compiler/dependency provisioning remains blocked below10GiB capacity.
+
+Focused Bun1.4.4 owned-scratch probe reproduces the original cp behavior: the copied Java-style legal link escapes the package and is rejected. With verbatimSymlinks:true the copied root has exactly the original content digest; changing the linked target changes that digest. Integrity code and confinement checks are unchanged. Existing Java registered-scanner failures provide the end-to-end regression cases; full platform CI still required.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done
