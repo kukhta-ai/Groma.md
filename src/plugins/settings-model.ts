@@ -10,6 +10,7 @@ interface PluginSettingFields {
   installSource?: string
   version?: string
   official: boolean
+  approvalRequired?: boolean
   status: 'ready' | 'unchecked' | 'blocked' | 'missing' | 'available'
   message: string
 }
@@ -37,6 +38,7 @@ export type PluginSettingsAction =
   | { action: 'add'; source: string }
   | { action: 'install' | 'restore' | 'remove'; id: string }
   | { action: 'update'; id: string; source?: string }
+  | { action: 'install-selected'; ids: string[] }
   | { action: 'retry' | 'install-recommended' | 'install-missing' }
 
 /** An offered update belongs to the exact source that was checked. */
@@ -79,6 +81,7 @@ export function pluginGroups(plugins: readonly PluginSetting[], query = ''): { t
 }
 
 export function pluginSettingAction(plugin: PluginSetting): PluginSettingsAction | undefined {
+  if (plugin.listed && plugin.approvalRequired) return { action: 'restore', id: plugin.id }
   if (plugin.listed && plugin.status === 'blocked') return { action: 'retry' }
   if (plugin.listed) return plugin.status === 'missing' ? { action: 'restore', id: plugin.id } : undefined
   return plugin.installSource ? { action: 'install', id: plugin.id } : undefined

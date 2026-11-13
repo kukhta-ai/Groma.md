@@ -6,7 +6,7 @@ import { test } from 'bun:test'
 import { EMPTY_WORK_SNAPSHOT, type WorkSource } from '@groma/work-source'
 import { loadProjectProfile, saveProjectProfile } from '../src/project-profile.ts'
 import { exportWebViewer } from '../src/viewers/web/export.ts'
-import { startWebViewer } from '../src/viewers/web/server.ts'
+import { startAuthenticatedViewer as startWebViewer } from './web-client.ts'
 import { sharingMetadata } from '../src/viewers/web/sharing/metadata.ts'
 
 const fixture = path.resolve(import.meta.dir, '../test/fixtures/empty-project')
@@ -40,6 +40,7 @@ test.concurrent('export writes the themed image referenced by its initial sharin
   try {
     await cp(mappedFixture, root, { recursive: true })
     const exported = await exportWebViewer(root, output, {
+      ackSourceExport: true,
       url: 'https://example.test/repository/architecture/blueprint',
     })
     await exported.close()
@@ -68,14 +69,15 @@ test.concurrent('live initial metadata uses the project profile and links to a t
     const project = await loadProjectProfile(root)
     await saveProjectProfile(root, { ...project!, title: 'Shared project', description: 'Tracks submitted requests.' })
     viewer = await startWebViewer(root, { port: 0, workSource: emptyWork() })
+    await viewer.fetch(`${viewer.url}/ready`)
     for (const theme of ['light', 'dark', 'blueprint']) {
       const url: string = `${viewer.url}/?theme=${theme}`
-      const fields = await headMetadata(await (await fetch(url)).text())
+      const fields = await headMetadata(await (await viewer.fetch(url)).text())
       assert.equal(fields.get('og:title'), 'Shared project')
       assert.equal(fields.get('og:description'), 'Tracks submitted requests.')
       assert.equal(fields.get('og:url'), url)
       assert.equal(fields.get('og:image'), `${viewer.url}/cover-${theme}.png`)
-      const image = await fetch(fields.get('og:image')!)
+      const image = await viewer.fetch(fields.get('og:image')!)
       assert.equal(image.headers.get('content-type'), 'image/png')
       assertCover(Buffer.from(await image.arrayBuffer()))
     }

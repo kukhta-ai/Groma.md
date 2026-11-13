@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
+import { readConfinedSource } from '../../history/snapshots.ts'
 
 import { withGitRevision } from '../../history/revisions.ts'
 import type { ArchitectureGraph } from '../../types.ts'
@@ -26,7 +25,7 @@ export async function readSource(
   if (reference === undefined) return undefined
 
   const load = async (root: string): Promise<SourcePayload> => {
-    const source = await readFile(path.join(root, reference.file), 'utf8')
+    const source = await readConfinedSource(root, reference.file)
     return { source }
   }
   return revision === null

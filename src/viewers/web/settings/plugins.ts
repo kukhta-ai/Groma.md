@@ -1,3 +1,4 @@
+import { renderPluginProposal } from '../plugin-confirmation.ts'
 import type { WebDataSource } from '../data.ts'
 import { escaped } from '../atoms/escape.ts'
 import { scannerName } from '../scanners/name.ts'
@@ -113,11 +114,34 @@ function settingGroup(group: ReturnType<typeof pluginGroups>[number], showBulk: 
   return `<section class="scanner-group"><div class="scanner-group-heading"><h2>${group.title}<span class="scanner-count">${group.plugins.length}</span></h2>${bulk}</div>${group.plugins.map(plugin => settingRow(plugin, upgrades)).join('')}</section>`
 }
 
+async function approveChange(data: WebDataSource, host: HTMLElement, action: PluginSettingsAction): Promise<PluginSettings | undefined> {
+  if (data.proposePluginChange === undefined || data.confirmPluginChange === undefined) throw new Error('Plugin approval is unavailable.')
+  const proposal = await data.proposePluginChange(action)
+  const panel = host.querySelector<HTMLElement>('[data-approval]')!
+  panel.innerHTML = `${renderPluginProposal(proposal)}<button class="chrome-button" type="button" data-approve>Approve and install</button><button class="chrome-button" type="button" data-decline>Cancel</button>`
+  panel.hidden = false
+  return new Promise((resolve, reject) => {
+    const finish = (): void => { panel.hidden = true; panel.replaceChildren() }
+    panel.querySelector('[data-decline]')!.addEventListener('click', () => { finish(); resolve(undefined) }, { once: true })
+    panel.querySelector<HTMLButtonElement>('[data-approve]')!.addEventListener('click', async event => {
+      for (const button of panel.querySelectorAll<HTMLButtonElement>('button')) button.disabled = true
+      event.preventDefault()
+      try { const next = await data.confirmPluginChange!(proposal.id); finish(); resolve(next) }
+      catch (error) { finish(); reject(error) }
+    }, { once: true })
+  })
+}
+
+function applyPluginAction(data: WebDataSource, host: HTMLElement, action: PluginSettingsAction): Promise<PluginSettings | undefined> {
+  return ['remove', 'retry', 'automatic-updates'].includes(action.action)
+    ? data.changePluginSettings!(action) : approveChange(data, host, action)
+}
+
 /** Plugin management uses the live data source inside Settings. */
 export function bindPluginSettings(data: WebDataSource, host: HTMLElement, onState: (state: PluginSettings) => void) {
-  host.innerHTML = '<p class="scanner-notice" hidden></p><label class="scanner-updates"><input type="checkbox" data-automatic-updates>Automatic updates</label><div class="scanner-tools"><input type="search" aria-label="Search plugins" placeholder="Search plugins"><button class="chrome-button" type="button" data-add>Add plugin</button></div>'
+  host.innerHTML = '<p class="scanner-notice" hidden></p><label class="scanner-updates"><input type="checkbox" data-automatic-updates>Check for updates automatically</label><div class="scanner-tools"><input type="search" aria-label="Search plugins" placeholder="Search plugins"><button class="chrome-button" type="button" data-add>Add plugin</button></div>'
     + '<form hidden><label>Plugin source<input name="source" placeholder="package name, package@version, Git URL, or local path" required></label><button class="chrome-button" type="submit">Add</button><button class="chrome-button" type="button" data-cancel>Cancel</button></form>'
-    + '<details class="scanner-error" hidden><summary></summary><pre></pre></details><button class="chrome-button" type="button" data-retry hidden>Retry installation</button><div data-rows></div>'
+    + '<details class="scanner-error" hidden><summary></summary><pre></pre></details><button class="chrome-button" type="button" data-retry hidden>Retry installation</button><section data-approval hidden></section><div data-rows></div>'
   const rows = host.querySelector<HTMLElement>('[data-rows]')!
   const error = host.querySelector<HTMLDetailsElement>('.scanner-error')!
   const form = host.querySelector('form')!
@@ -153,7 +177,7 @@ export function bindPluginSettings(data: WebDataSource, host: HTMLElement, onSta
   }
   function setBusy() {
     automatic.disabled = busy !== undefined
-    for (const button of host.querySelectorAll<HTMLButtonElement>('button')) button.disabled = busy !== undefined
+    for (const button of host.querySelectorAll<HTMLButtonElement>('button:not([data-approval] button)')) button.disabled = busy !== undefined
     if (!busy || !('id' in busy)) return
     const button = rows.querySelector<HTMLButtonElement>(`[data-scanner-id="${CSS.escape(busy.id)}"] .scanner-primary button`)
     if (!button) return
@@ -181,7 +205,7 @@ export function bindPluginSettings(data: WebDataSource, host: HTMLElement, onSta
     }
     catch (cause) {
       showError('Could not load plugins', String(cause))
-      if (!checkUpdates) onState({ automaticUpdates: state?.automaticUpdates ?? true, plugins: [], notice: { tone: 'error', message: String(cause) }, limits: [] })
+      if (!checkUpdates) onState({ automaticUpdates: state?.automaticUpdates ?? false, plugins: [], notice: { tone: 'error', message: String(cause) }, limits: [] })
     }
   }
   function focusAction(action: PluginSettingsAction) {
@@ -193,7 +217,10 @@ export function bindPluginSettings(data: WebDataSource, host: HTMLElement, onSta
     if (busy) return
     busy = action; failedAction = undefined; retry.hidden = true
     if (state) paint(state)
-    try { paint(await data.changePluginSettings!(action)) }
+    try {
+      const next = await applyPluginAction(data, host, action)
+      if (next !== undefined) paint(next)
+    }
     catch (cause) {
       showError('Plugin action failed', cause instanceof Error ? cause.message : String(cause))
       failedAction = action; retry.hidden = false

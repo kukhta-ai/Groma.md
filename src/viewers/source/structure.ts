@@ -1,5 +1,5 @@
 import type { CodeFile, SourceReference } from '@groma/scanner'
-import { configuredScannerModules, type FoundScannerModule } from '../../scanner/modules/inventory.ts'
+import { configuredScannerModules, type FoundScannerModule, type ScannerResolutionOptions } from '../../scanner/modules/inventory.ts'
 import { importScanner } from '../../scanner/registry.ts'
 import { readGromaConfig } from '../../config.ts'
 import { configuredSelection, selectedFiles } from '../../scanner/modules/selection.ts'
@@ -47,9 +47,10 @@ export async function readCodeStructure(
   world: ArchitectureGraph,
   revision: string | null,
   elementId: string,
+  options: ScannerResolutionOptions = {},
 ): Promise<CodeFile[] | undefined> {
   const sourceFiles = await outlineSourceFiles(repositoryRoot, revision)
-  const load = (root: string) => readSnapshotCodeStructure(repositoryRoot, root, world, elementId, sourceFiles)
+  const load = (root: string) => readSnapshotCodeStructure(repositoryRoot, root, world, elementId, sourceFiles, options)
   return revision === null ? load(repositoryRoot) : withGitRevision(repositoryRoot, revision, load)
 }
 
@@ -60,12 +61,13 @@ export async function readSnapshotCodeStructure(
   world: ArchitectureGraph,
   elementId: string,
   sourceFiles: readonly string[],
+  options: ScannerResolutionOptions = {},
 ): Promise<CodeFile[] | undefined> {
   const element = world.elements.find(candidate => (
     candidate.kind === 'component' && candidate.representationId === elementId
   ))
   if (element === undefined) return undefined
-  const modules = (await configuredScannerModules(repositoryRoot))
+  const modules = (await configuredScannerModules(repositoryRoot, options))
     .filter((module): module is FoundScannerModule => module.status === 'found')
   const requests = outlineRequests(element.code, new Set(modules.map(module => module.id)))
   const order = requests.map(request => request.reference.file)
@@ -75,7 +77,7 @@ export async function readSnapshotCodeStructure(
     if (references.length === 0) return []
     // A scanner that cannot load or outline here, such as one missing its worker, contributes no outline, like one without the hook.
     try {
-      const scanner = await importScanner(module.entry, module.id)
+      const scanner = await importScanner(repositoryRoot, module, options)
       const context = selectedFiles(sourceFiles, configuredSelection(config, module.id))
       return await scanner.readCodeStructure?.(snapshotRoot, references, module.settings, context) ?? []
     } catch {

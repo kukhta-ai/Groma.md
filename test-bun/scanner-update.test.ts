@@ -5,9 +5,9 @@ import { readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import packageJson from '../package.json'
-import { configuredScannerModules, updateNpmScanners, updateScanner } from '../src/scanner/modules/inventory.ts'
+import { configuredScannerModules, checkNpmScannerUpdates, updateScanner } from '../src/scanner/modules/inventory.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
-import { changePluginSettings, parsePluginSettingsAction } from '../src/plugins/settings.ts'
+import { changePluginSettings, parsePluginSettingsAction, readPluginSettings, withPluginUpgrades } from '../src/plugins/settings.ts'
 import { restorePlugin } from '../src/plugins/management.ts'
 import { createScannerSession } from '../src/scanner/session.ts'
 import { scanRepository, watchScan } from '../src/scanner.ts'
@@ -35,7 +35,7 @@ async function fixture() {
     return Response.json({ name, versions, 'dist-tags': { latest: '2.0.0' } })
   } })
   const release = () => { held?.resolve(); held = undefined }
-  const close = async () => { release(); await server.stop(true); await rm(root, { recursive: true, force: true }) }
+  const close = async () => { release(); await server.stop(true); await rm(root, { recursive: true, force: true }); await rm(`${root}-trust`, { recursive: true, force: true }) }
   try {
     await cp(path.resolve(import.meta.dir, '../test/fixtures/flows'), root, { recursive: true })
     const pkg = path.join(root, 'package')
@@ -60,7 +60,7 @@ async function fixture() {
     await writeFile(path.join(root, 'src/main.sample'), 'first')
     await writeFile(path.join(root, '.gitignore'), 'cache/\npackage/\n*.tgz\n')
     expect(await Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'pipe' }).exited).toBe(0)
-    const config = { workSources: [], exclude: ['generated/**'], useGitignore: false, scanners: [
+    const config = { workSources: [], automaticUpdates: true, exclude: ['generated/**'], useGitignore: false, scanners: [
       { id: 'sample', source: `${name}@1.0.0`, settings: { mode: 'strict' }, include: ['src/**/*.sample'], exclude: ['**/*.gen.ts'] },
     ] }
     await writeGromaConfig(root, config)
@@ -71,24 +71,12 @@ async function fixture() {
       },
       holdRegistry: () => { held = Promise.withResolvers<void>(); requested = Promise.withResolvers<void>(); return { requested: requested.promise, release } },
       goOffline: () => server.stop(true),
-      options: { registry: server.url.href, cacheRoot: path.join(root, 'cache') },
+      options: { registry: server.url.href, cacheRoot: path.join(root, 'cache'), approvalsFile: path.join(`${root}-trust`, 'approvals.json'), confirm: async () => true },
       metadataReads: () => metadataReads,
       publishNewer: () => { versions['1.2.0'] = releases['1.2.0'] },
       makeUnavailable: () => { unavailable = true }, close,
     }
   } catch (error) { await close(); throw error }
-}
-
-// A detached grandchild has no Subprocess handle in this test process.
-async function waitForProcessExit(pid: number): Promise<void> {
-  while (true) {
-    try { process.kill(pid, 0) }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return
-      throw error
-    }
-    await Bun.sleep(10)
-  }
 }
 
 test.concurrent('explicit npm updates select compatible releases and preserve project settings', async () => {
@@ -108,7 +96,6 @@ test.concurrent('explicit npm updates select compatible releases and preserve pr
     await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, f.options)
     expect(await readGromaConfig(f.root)).toEqual(config)
     await expect(updateScanner(f.root, 'sample', '@example/different@1.1.0', f.options)).rejects.toThrow('same npm package')
-    await expect(updateScanner(f.root, 'other', undefined, f.options)).rejects.toThrow('local plugins')
     f.makeUnavailable()
     await expect(updateScanner(f.root, 'sample', undefined, f.options)).rejects.toThrow('503')
     expect(await readGromaConfig(f.root)).toEqual(config)
@@ -123,7 +110,7 @@ test.concurrent('automaticUpdates false skips registry checks while installed sc
     const config = { ...f.config, automaticUpdates: false }
     await writeGromaConfig(f.root, config)
     const reads = f.metadataReads()
-    expect(await updateNpmScanners(f.root, f.options)).toBe(false)
+    expect(await checkNpmScannerUpdates(f.root, f.options)).toEqual([])
     session = await createScannerSession(f.root, f.options)
     await session.ready
     await session.close()
@@ -141,44 +128,40 @@ test.concurrent('disabling automaticUpdates during a held check keeps the instal
   try {
     await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, f.options)
     gate = f.holdRegistry()
-    const updating = updateNpmScanners(f.root, f.options)
+    const updating = checkNpmScannerUpdates(f.root, f.options)
     await gate.requested
     const config = { ...f.config, automaticUpdates: false }
     await writeGromaConfig(f.root, config)
     gate.release()
-    expect(await updating).toBe(false)
+    expect(await updating).toEqual([])
     expect(await readGromaConfig(f.root)).toEqual(config)
   } finally { gate?.release(); await f.close() }
 })
 
-test.concurrent('live startup uses the installed scanner before a held update check, then rescans after updating', async () => {
+test.concurrent('live startup uses approved installed code while held metadata checks neither update nor rescan', async () => {
   const f = await fixture()
-  const updated = Promise.withResolvers<void>()
   const edited = Promise.withResolvers<void>()
   let session: Awaited<ReturnType<typeof createScannerSession>> | undefined
   let gate: ReturnType<typeof f.holdRegistry> | undefined
   try {
     await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, f.options)
     gate = f.holdRegistry()
-    session = await createScannerSession(f.root, { ...f.options, onFold: () => {
-      if (f.scans.length === 2) updated.resolve()
-      if (f.scans.length === 3) edited.resolve()
-    } })
+    session = await createScannerSession(f.root, { ...f.options, onFold: () => { if (f.scans.length === 2) edited.resolve() } })
     expect(await Promise.race([session.ready.then(() => 'ready'), gate.requested.then(() => 'registry')])).toBe('ready')
     await session.ready
     expect(f.scans).toEqual(['1.0.0'])
     await gate.requested
-    const changed = { ...f.config, scanners: [{ ...f.config.scanners[0], settings: { mode: 'changed' } }] }
-    await writeGromaConfig(f.root, changed)
+    const checking = session.checkUpdates()
     gate.release()
-    await updated.promise
-    expect(f.scans).toEqual(['1.0.0', '1.1.0'])
-    expect(await readGromaConfig(f.root)).toEqual({ ...changed, scanners: [{ ...changed.scanners[0], source: `${f.name}@1.1.0` }] })
+    await checking
+    expect(f.scans).toEqual(['1.0.0'])
+    expect(await readGromaConfig(f.root)).toEqual(f.config)
+    expect(session.state.upgrades?.[`${f.name}@1.0.0`]?.version).toBe('1.1.0')
     const reads = f.metadataReads()
     f.publishNewer()
     await writeFile(path.join(f.root, 'src/main.sample'), 'edited')
     await edited.promise
-    expect(f.scans).toEqual(['1.0.0', '1.1.0', '1.1.0'])
+    expect(f.scans).toEqual(['1.0.0', '1.0.0'])
     expect(f.metadataReads()).toBe(reads)
   } finally { gate?.release(); await session?.close(); await f.close() }
 })
@@ -224,54 +207,40 @@ test.concurrent('closing a live session does not wait for its held registry chec
   } finally { gate?.release(); await session?.close(); await f.close() }
 })
 
-test.concurrent('a one-shot CLI scan exits while its background registry check is held', async () => {
+test.concurrent('a one-shot CLI scan has no detached installer and skips registry checks by default', async () => {
   const f = await fixture()
-  let gate: ReturnType<typeof f.holdRegistry> | undefined
-  let child: Bun.Subprocess<'ignore', 'pipe', 'pipe'> | undefined
-  let workerPid: number | undefined
   try {
-    const home = path.join(f.root, 'home')
-    await mkdir(home)
-    const workerPidFile = path.join(home, 'worker.pid')
-    const preload = path.join(home, 'observe-worker.ts')
-    await writeFile(preload, `import { writeFileSync } from 'node:fs';
-      if (process.argv.at(-1) === 'refresh') writeFileSync(${JSON.stringify(workerPidFile)}, String(process.pid));`)
-    await writeFile(path.join(f.root, 'bunfig.toml'), 'preload = ["./home/observe-worker.ts"]\n')
-    await writeFile(path.join(home, '.npmrc'), `@example:registry=${f.options.registry}\n`)
-    await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, { ...f.options, cacheRoot: path.join(home, '.groma/cache/scanners') })
-    gate = f.holdRegistry()
-    child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), 'scan'], {
-      cwd: f.root, env: { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: home }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+    await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, f.options)
+    const { automaticUpdates: _automatic, ...config } = f.config
+    await writeGromaConfig(f.root, config)
+    const reads = f.metadataReads()
+    const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), '--plugin-approvals', f.options.approvalsFile, 'scan'], {
+      cwd: f.root, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
     })
-    await gate.requested
-    workerPid = Number(await readFile(workerPidFile, 'utf8'))
-    expect(await child.exited, await new Response(child.stderr).text()).toBe(0)
+    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+    expect(code, stderr).toBe(0)
+    expect(stdout).toContain('ok')
     expect(f.scans).toEqual(['1.0.0'])
-  } finally {
-    // Fail the held check so its detached worker has no download or project write left to perform.
-    f.makeUnavailable(); gate?.release()
-    await child?.exited
-    // Windows keeps a running process's working directory in use.
-    if (workerPid !== undefined) await waitForProcessExit(workerPid)
-    await f.close()
-  }
+    expect(f.metadataReads()).toBe(reads)
+    expect(await readGromaConfig(f.root)).toEqual(config)
+  } finally { await f.close() }
 })
 
-test.concurrent('restoring an npm scanner selects the current release and reuses its installed package', async () => {
+test.concurrent('restoring an npm scanner keeps its exact approved release despite newer compatible registry versions', async () => {
   const f = await fixture()
   try {
     await restorePlugin(f.root, 'sample', f.options)
-    const expected = { ...f.config, scanners: [{ ...f.config.scanners[0], source: `${f.name}@1.1.0` }] }
+    const expected = f.config
     expect(await readGromaConfig(f.root)).toEqual(expected)
-    expect(f.downloads).toEqual(['1.1.0.tgz'])
+    expect(f.downloads).toEqual(['1.0.0.tgz'])
     const saved = await readFile(path.join(f.root, 'groma/config.json'), 'utf8')
     await restorePlugin(f.root, 'sample', f.options)
-    expect(f.downloads).toEqual(['1.1.0.tgz'])
+    expect(f.downloads).toEqual(['1.0.0.tgz'])
     expect(await readFile(path.join(f.root, 'groma/config.json'), 'utf8')).toBe(saved)
   } finally { await f.close() }
 })
 
-test.concurrent('a manual update keeps concurrent plugin removal and edited project settings', async () => {
+test.concurrent('a manual update rejects stale consent after concurrent plugin removal and preserves edited settings', async () => {
   const f = await fixture()
   let gate: ReturnType<typeof f.holdRegistry> | undefined
   try {
@@ -287,9 +256,8 @@ test.concurrent('a manual update keeps concurrent plugin removal and edited proj
       scanners: current.scanners.map(scanner => ({ ...scanner, settings: { mode: 'edited' } })) }
     await writeGromaConfig(f.root, changed)
     gate.release()
-    await updating
-    expect(await readGromaConfig(f.root)).toEqual({ ...changed,
-      scanners: changed.scanners.map(scanner => ({ ...scanner, source: `${f.name}@1.1.0` })) })
+    await expect(updating).rejects.toThrow('selection changed')
+    expect(await readGromaConfig(f.root)).toEqual(changed)
   } finally { gate?.release(); await f.close() }
 })
 
@@ -337,12 +305,12 @@ test.concurrent('Plugins switches automatic updates without rescanning and honor
     await session.change({ action: 'automatic-updates', enabled: true })
     await session.checkUpdates()
     expect(session.state.automaticUpdates).toBe(true)
-    expect(f.scans).toEqual(['1.0.0', '1.1.0'])
+    expect(f.scans).toEqual(['1.0.0'])
     const current = await readGromaConfig(f.root)
     await writeGromaConfig(f.root, { ...current, automaticUpdates: false })
     await session.reconfigure()
     expect(session.state.automaticUpdates).toBe(false)
-    expect(f.scans).toEqual(['1.0.0', '1.1.0'])
+    expect(f.scans).toEqual(['1.0.0'])
     expect(() => parsePluginSettingsAction({ action: 'automatic-updates', enabled: 'false' })).toThrow()
   } finally { gate?.release(); await session?.close(); await f.close() }
 })
@@ -356,7 +324,7 @@ test.concurrent('opening Plugins rechecks a running session without waiting and 
     session = await createScannerSession(f.root, f.options)
     await session.ready
     await session.checkUpdates()
-    expect(f.scans).toEqual(['1.0.0', '1.1.0'])
+    expect(f.scans).toEqual(['1.0.0'])
     f.publishNewer()
     const reads = f.metadataReads()
     gate = f.holdRegistry()
@@ -364,41 +332,64 @@ test.concurrent('opening Plugins rechecks a running session without waiting and 
     const overlapping = session.checkUpdates()
     await gate.requested
     const settings = await session.refresh(true)
-    expect(settings.plugins.find(plugin => plugin.id === 'sample')?.version).toBe('1.1.0')
+    expect(settings.plugins.find(plugin => plugin.id === 'sample')?.version).toBe('1.0.0')
     const repeated = session.checkUpdates()
     gate.release()
     await Promise.all([checking, overlapping, repeated])
-    // Repeated openings add no requests beyond one compatibility lookup and installation.
+    // Repeated openings share one metadata-only compatibility lookup.
     expect(f.metadataReads() - reads).toBeLessThanOrEqual(3)
-    expect(session.state.plugins.find(plugin => plugin.id === 'sample')?.version).toBe('1.2.0')
-    expect(f.scans).toEqual(['1.0.0', '1.1.0', '1.2.0'])
+    expect(session.state.plugins.find(plugin => plugin.id === 'sample')?.version).toBe('1.0.0')
+    expect(session.state.upgrades?.[`${f.name}@1.0.0`]?.version).toBe('1.2.0')
+    expect(f.scans).toEqual(['1.0.0'])
   } finally { gate?.release(); await session?.close(); await f.close() }
 })
 
-test.concurrent('web Plugins retains registry diagnostics when automatic updates are enabled', async () => {
+test.concurrent('Plugins retains registry diagnostics while automatic metadata checks are enabled', async () => {
   const f = await fixture()
-  const home = await mkdtemp(path.join(os.tmpdir(), 'groma-plugins-home-'))
   try {
     await updateScanner(f.root, 'sample', `${f.name}@1.0.0`, f.options)
-    await cp(f.options.cacheRoot, path.join(home, '.groma/cache/scanners'), { recursive: true })
-    await writeFile(path.join(home, '.npmrc'), `registry=${f.options.registry}\n`)
     f.makeUnavailable()
-    const probe = path.join(home, 'probe.ts')
-    await writeFile(probe, `
-      import { createWebMapSession } from ${JSON.stringify(path.resolve(import.meta.dir, '../src/viewers/web/map-session.ts'))}
-      const session = await createWebMapSession(${JSON.stringify(f.root)}, { scan: false })
-      try {
-        const response = await session.fetch(new Request('http://localhost/plugin-settings?updates'))
-        console.log(JSON.stringify(await response.json()))
-      } finally { await session.close() }
-    `)
-    const child = Bun.spawn([process.execPath, probe], {
-      stdout: 'pipe', stderr: 'pipe', env: { ...process.env, HOME: home, USERPROFILE: home },
-    })
-    const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
-    expect(code, stderr).toBe(0)
-    const settings = JSON.parse(stdout)
+    const settings = await withPluginUpgrades(await readPluginSettings(f.root, [], f.options), f.options.registry)
     expect(settings.automaticUpdates).toBe(true)
     expect(settings.upgrades?.[`${f.name}@1.0.0`]?.error).toContain('503')
-  } finally { await f.close(); await rm(home, { recursive: true, force: true }) }
+    expect(f.scans).toEqual([])
+    expect((await readGromaConfig(f.root)).scanners[0]?.source).toBe(`${f.name}@1.0.0`)
+  } finally { await f.close() }
+})
+
+test.concurrent('a missing approved SDK is restored from its frozen lock with identical complete bytes and exact version', async () => {
+  const f = await fixture()
+  try {
+    await restorePlugin(f.root, 'sample', f.options)
+    const selected = (await configuredScannerModules(f.root, f.options))[0]!
+    if (selected.status !== 'found') throw new Error('Expected approved SDK')
+    const integrity = selected.integrity
+    const ledger = JSON.parse(await readFile(f.options.approvalsFile, 'utf8'))
+    expect(ledger.approvals[0].restore.bunLock).toContain('1.0.0')
+    await rm(selected.contentRoot, { recursive: true })
+    f.publishNewer()
+    await restorePlugin(f.root, 'sample', f.options)
+    expect((await configuredScannerModules(f.root, f.options))[0]).toMatchObject({ integrity, version: '1.0.0' })
+    expect((await readGromaConfig(f.root)).scanners[0]?.source).toBe(`${f.name}@1.0.0`)
+    expect(f.downloads.length).toBeGreaterThanOrEqual(1)
+    expect(f.downloads.every(name => name === '1.0.0.tgz')).toBe(true)
+    expect(f.scans).toEqual([])
+  } finally { await f.close() }
+})
+
+test.concurrent('Restore refuses modified approved content rather than replacing it with a fresh registry resolution', async () => {
+  const f = await fixture()
+  try {
+    await restorePlugin(f.root, 'sample', f.options)
+    const selected = (await configuredScannerModules(f.root, f.options))[0]!
+    if (selected.status !== 'found') throw new Error('Expected approved SDK')
+    const entry = await readFile(selected.entry, 'utf8')
+    await writeFile(selected.entry, `${entry}\nthrow new Error('changed');\n`)
+    f.publishNewer()
+    await expect(restorePlugin(f.root, 'sample', f.options)).rejects.toThrow('Approved scanner content changed')
+    expect(f.downloads).toEqual(['1.0.0.tgz'])
+    expect((await readGromaConfig(f.root)).scanners[0]?.source).toBe(`${f.name}@1.0.0`)
+    expect(await readFile(selected.entry, 'utf8')).toContain("throw new Error('changed')")
+    expect(f.scans).toEqual([])
+  } finally { await f.close() }
 })

@@ -2,16 +2,15 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { buildWorker } from '../plugins/scanners/go/build.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
+import { buildPackage, buildWorker } from '../plugins/scanners/go/build.ts'
 import manifest from '../plugins/scanners/go/package.json'
 import { readGoCodeStructure, run, scanGoSource } from '../plugins/scanners/go/src/adapter.ts'
 import plugin from '../plugins/scanners/go/src/index.ts'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import { readCodeStructure } from '../src/viewers/source/structure.ts'
-
 import type { CodeType, ScanObservation } from '@groma/scanner'
 
 const go = process.env.GROMA_TEST_GO
@@ -79,7 +78,7 @@ goTest('Go resolves imported functions and concrete methods while preserving wra
     const renamed = calls(await scanGoSource(root, options, await goFiles(root)))
     expect(renamed.filter(call => call.member === 'Build').map(call => call.targets))
       .toEqual(evidence.filter(call => call.member === 'Build').map(call => call.targets))
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go scans source without its dependencies and fails only on invalid syntax', async () => {
@@ -102,7 +101,7 @@ goTest('Go scans source without its dependencies and fails only on invalid synta
     await rm(path.join(root, 'provider'), { recursive: true })
     await writeFile(path.join(root, 'caller.go'), '//go:build tools\n\npackage dispatch\n')
     expect((await scanGoSource(root, { worker }, await goFiles(root))).files).toEqual([])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go reports every function of a directory that declares names twice, and binds each use within its own file', async () => {
@@ -138,7 +137,7 @@ goTest('Go reports every function of a directory that declares names twice, and 
         'second.go -> second.go', 'third.go -> unresolved'])
     expect(observation.httpRequests!.map(request => `${files.get(request.operation)} ${httpPath(request.path)}`).sort())
       .toEqual(['first.go /first', 'second.go /second'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go scans every machine alike, in one linux/amd64 build context with cgo', async () => {
@@ -157,7 +156,7 @@ goTest('Go scans every machine alike, in one linux/amd64 build context with cgo'
       input: JSON.stringify(['cgo.go', 'mode_linux.go', 'mode_windows.go', 'plain.go']),
     })
     expect((JSON.parse(output) as ScanObservation).files.map(file => file.file)).toEqual(['cgo.go', 'mode_linux.go'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go reads and lists the files the go command reads', async () => {
@@ -175,7 +174,7 @@ goTest('Go reads and lists the files the go command reads', async () => {
     expect(listed).toEqual(['build/output.go', 'caller.go', 'generated/api.go', 'provider/provider.go', 'tools/tools.go'])
     // Each module scans on its own, and together they read exactly what the listing names.
     expect((await plugin.scan(root, { worker }, await goFiles(root)))!.files.map(file => file.file).sort()).toEqual(listed)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go lists vendored source, and reads only the go.mod and .go files it is handed', async () => {
@@ -194,7 +193,7 @@ goTest('Go lists vendored source, and reads only the go.mod and .go files it is 
     const files = await scannerFiles(root, { include, exclude: ['*.pb.go', ...exclude, '!api.pb.go'] })
     expect((await plugin.scan(root, { worker }, files))!.files.map(file => file.file).sort())
       .toEqual(['api.pb.go', 'caller.go', 'provider/provider.go'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go attaches source ranges and binding-normalized tokens only to named operations', async () => {
@@ -224,7 +223,7 @@ goTest('Go attaches source ranges and binding-normalized tokens only to named op
     expect(named('.Tail').tokens).not.toEqual(named('.Head').tokens!)
     // Grouping parentheses change evaluation order.
     expect(named('.Scaled').tokens).not.toEqual(named('.Offset').tokens!)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go reports positions in the file as written, whatever //line directives say', async () => {
@@ -251,7 +250,7 @@ goTest('Go reports positions in the file as written, whatever //line directives 
     expect(observation.diagnostics).toContainEqual(expect.objectContaining({ file: 'caller.go', line: 5 }))
     const [outlined] = await readGoCodeStructure(root, [{ file: 'first.go', symbols: [] }], { worker })
     expect(outlined!.declarations[0]!.line).toBe(4)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('groma lint reports identical and near-duplicate Go bodies across renamed local names', async () => {
@@ -261,10 +260,12 @@ goTest('groma lint reports identical and near-duplicate Go bodies across renamed
     await buildWorker(worker, go)
     const git = Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'pipe' })
     expect(await git.exited).toBe(0)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/go'))
+    const artifact = path.join(`${root}-plugins`, 'go')
+    await buildPackage(artifact, go)
+    await addFixtureScanner(root, artifact)
     const config = await readGromaConfig(root)
     await writeGromaConfig(root, { ...config, scanners: config.scanners.map(scanner => ({ ...scanner, settings: { worker } })) })
-    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), 'lint'],
+    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'],
       { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)
@@ -280,7 +281,7 @@ goTest('groma lint reports identical and near-duplicate Go bodies across renamed
     expect(findings).toContainEqual({
       locations: [`copy.go:${lineOf(copy, 'func Completion')}`, `ready.go:${lineOf(ready, 'func Progress')}`], similar: true,
     })
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go outlines defined types with their receiver methods and top-level functions', async () => {
@@ -318,25 +319,27 @@ goTest('Go outlines defined types with their receiver methods and top-level func
     expect(linked!.declarations.flatMap(declaration => declaration.kind === 'type'
       ? declaration.members.filter(member => member.entry).map(member => `${declaration.name}.${member.name}`) : []))
       .toEqual(['Store.Close'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('a component with Go and TypeScript files outlines every file in Code order', async () => {
   const { root, worker } = await fixture('go-outline')
   try {
     await buildWorker(worker, go)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/go'))
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    const artifact = path.join(`${root}-plugins`, 'go')
+    await buildPackage(artifact, go)
+    await addFixtureScanner(root, artifact)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const config = await readGromaConfig(root)
     await writeGromaConfig(root, {
       ...config, scanners: config.scanners.map(scanner => scanner.id === 'go' ? { ...scanner, settings: { worker } } : scanner),
     })
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual(component.code.map(reference => reference.file))
     expect(files.every(file => file.declarations.length > 0)).toBeTrue()
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 /**
@@ -440,7 +443,7 @@ goTest('Go reports HTTP endpoints from every supported router with their group p
       'gorilla.go POST /reviews @gorilla.go:0',
       'gorilla.go PUT /reviews @gorilla.go:0',
     ].sort())
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 goTest('Go reports what each net/http request proves and leaves the rest unknown', async () => {
@@ -486,9 +489,8 @@ goTest('Go reports what each net/http request proves and leaves the rest unknown
       'POST <base>/talks',
       'PUT /talks/7',
     ].sort())
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
-
 
 test.concurrent('Go failures preserve stderr and native termination details', async () => {
   const failure = await run(process.execPath, ['--eval', 'console.error("build failed"); process.exit(23)'], os.tmpdir()).catch(error => error)

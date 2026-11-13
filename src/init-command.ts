@@ -3,6 +3,8 @@ import { join } from 'node:path'
 
 import { loadArchitecture } from './architecture-reader.ts'
 import { backlogInitialized, initializeBacklog } from './work/backlog-cli.ts'
+import { approvedBacklogCommand } from './work/backlog-tool.ts'
+import type { PluginTrustOptions } from './plugins/trust.ts'
 import { createClackInitUi } from './init-command-ui.ts'
 import {
   initializeGroma,
@@ -45,7 +47,7 @@ export interface InitCommandUi extends ScannerSetupUi {
 export interface RepositoryInitDependencies {
   /** Adds Backlog.md to config.json and installs its CLI when missing. */
   addBacklog(repositoryRoot: string): Promise<void>
-  backlogAvailable(): boolean
+  backlogAvailable(repositoryRoot: string): boolean | Promise<boolean>
   backlogInitialized(repositoryRoot: string): Promise<boolean>
   gitInitialized(repositoryRoot: string): Promise<boolean>
   initializeBacklog(repositoryRoot: string, projectName: string): Promise<boolean>
@@ -107,7 +109,7 @@ async function initializeGit(repositoryRoot: string): Promise<boolean> {
 
 const defaultDependencies: InitCommandDependencies = {
   addBacklog: async repositoryRoot => { await addPlugin(repositoryRoot, 'backlog') },
-  backlogAvailable: () => Bun.which('backlog') !== null,
+  backlogAvailable: repositoryRoot => approvedBacklogCommand(repositoryRoot).then(() => true, () => false),
   backlogInitialized,
   error: message => console.error(message),
   gitInitialized,
@@ -147,7 +149,7 @@ async function initializeSelectedBacklog(
 ): Promise<RepositoryInitResult['backlog']> {
   const config = await readGromaConfig(repositoryRoot)
   if (!config.workSources.some(work => work.id === 'backlog')) return 'unselected'
-  if (!dependencies.backlogAvailable()) return 'unavailable'
+  if (!await dependencies.backlogAvailable(repositoryRoot)) return 'unavailable'
   if (await dependencies.backlogInitialized(repositoryRoot)) return 'unchanged'
   return await dependencies.initializeBacklog(repositoryRoot, projectName)
     ? 'initialized'
@@ -173,7 +175,7 @@ export async function backlogOffer(
   repositoryRoot: string, overrides: Partial<RepositoryInitDependencies> = {},
 ): Promise<{ installed: boolean } | undefined> {
   if ((await readGromaConfig(repositoryRoot)).workSources.length) return undefined
-  return { installed: { ...defaultDependencies, ...overrides }.backlogAvailable() }
+  return { installed: await { ...defaultDependencies, ...overrides }.backlogAvailable(repositoryRoot) }
 }
 
 /** The browser setup's Backlog.md step: adds it, installing its CLI when missing, and initializes it for the project. */
@@ -187,6 +189,25 @@ export async function setUpBacklog(
   }
 }
 
+/** Complete browser initialization only after its separate content proposal was confirmed. */
+export async function initializeApprovedBacklog(
+  repositoryRoot: string,
+  projectName: string,
+  overrides: Partial<RepositoryInitDependencies> = {},
+  options: PluginTrustOptions = {},
+): Promise<void> {
+  await approvedBacklogCommand(repositoryRoot, options)
+  const dependencies = {
+    ...defaultDependencies,
+    backlogAvailable: () => Promise.resolve(true),
+    backlogInitialized: (root: string) => backlogInitialized(root, options),
+    initializeBacklog: (root: string, name: string) => initializeBacklog(root, name, options),
+    ...overrides,
+  }
+  const outcome = await initializeSelectedBacklog(repositoryRoot, projectName, dependencies)
+  if (outcome !== 'initialized' && outcome !== 'unchanged') throw new Error('Could not initialize approved Backlog.md')
+}
+
 function settingsSummary(projectName: string, directory: GromaDirectory): string {
   return `Project: ${projectName}\nGroma folder: ${directory}/`
 }
@@ -196,12 +217,12 @@ function commandReminder(ui: InitCommandUi): void {
 }
 
 /**
- * Adds Backlog.md through the plugin flow. An installed CLI makes it part of the project without a question; a missing
- * one is offered for installation, with yes preselected. True when Backlog.md is ready to initialize.
+ * Adds Backlog.md through the plugin flow. A selected, approved tool is ready immediately; otherwise
+ * exact content must pass the plugin consent flow. True when Backlog.md is ready to initialize.
  */
 async function chooseBacklog(repositoryRoot: string, dependencies: InitCommandDependencies): Promise<boolean> {
   const ui = dependencies.ui
-  const installed = dependencies.backlogAvailable()
+  const installed = await dependencies.backlogAvailable(repositoryRoot)
   if (!installed) {
     const wanted = await ui.confirmBacklogInstall()
     if (wanted === undefined) cancelled()

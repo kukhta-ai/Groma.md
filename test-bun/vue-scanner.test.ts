@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { ScannerPlugin, SourceReference } from '@groma/scanner'
 import { buildPackage } from '../plugins/scanners/vue/build.ts'
 import manifest from '../plugins/scanners/vue/package.json'
@@ -259,7 +260,7 @@ test.concurrent('Vue reports a missing declared TypeScript root while scanning l
 test.concurrent('the live Vue session refreshes after external script, template, and style edits', async () => {
   const { temporary, root, artifact } = await setup()
   let complete: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { complete?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { complete?.() } })
   try {
     await session.change({ action: 'add', source: artifact })
     expect(session.state.plugins.find(scanner => scanner.id === 'vue')?.status).toBe('ready')
@@ -313,13 +314,11 @@ test.concurrent('a script Vue and TypeScript both own shows one outline', async 
   try {
     const child = Bun.spawn(['git', 'init', '--quiet'], { cwd: root, stdout: 'ignore', stderr: 'pipe' })
     expect(await child.exited, await new Response(child.stderr).text()).toBe(0)
-    await writeFile(path.join(root, 'groma/config.json'), JSON.stringify({ scanners: [
-      { id: 'typescript', source: path.resolve(import.meta.dir, '../plugins/scanners/typescript'), include: typescriptManifest.groma.scanner.include },
-      { id: 'vue', source: artifact, include: manifest.groma.scanner.include },
-    ] }))
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact)
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
 
     // Only the Vue link names greeting, whichever scanner outlines the shared script.
     expect(files.map(file => file.file)).toEqual(['Profile.vue', 'greeting.ts'])

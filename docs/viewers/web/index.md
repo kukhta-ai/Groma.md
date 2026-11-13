@@ -52,7 +52,7 @@ The shared viewer rules live in [Viewers](../index.md).
 
 ## Static publication
 
-`groma export <directory>` reads stored architecture and writes the web view as
+`groma export <directory> --ack-source-export` reads stored architecture and writes the web view as
 static HTML, JavaScript, snapshot, and generation files. The read-only page
 includes the project profile, architecture, flows, and source inspection. Every
 export excludes tasks, task pins, task search results, and editing controls. It
@@ -63,6 +63,14 @@ source file copied into the output can be read by anyone who can access the stat
 host. Publish the directory only through a static host whose access rules match
 the project.
 
+The acknowledgement is required before any export output is created. New output
+directories and files use private permissions; publication and any access changes
+remain an explicit operator action. A successful native export is not a secret scan.
+For an inspecting consumer, `--source-manifest /absolute/private/inventory.json`
+writes the exact captured raw texts separately for each selected revision, including
+the old side of a comparison. Keep this inventory private too. WPM checks these
+texts and the rendered site in private staging before final delivery.
+
 Export does not run a scanner; run `groma scan` first when source changes need to
 be reflected in the stored architecture. By default, export captures the working
 tree, including uncommitted source changes.
@@ -71,13 +79,13 @@ Use an explicit commit to capture its architecture, source, and commit metadata
 regardless of the current checkout:
 
 ```sh
-groma export ./site --revision HEAD
+groma export ./site --revision HEAD --ack-source-export
 ```
 
 Use two explicit commits to export a comparison:
 
 ```sh
-groma export ./site --from "$BASE_SHA" --revision "$HEAD_SHA"
+groma export ./site --from "$BASE_SHA" --revision "$HEAD_SHA" --ack-source-export
 ```
 
 The site opens the comparison from the older commit to the newer one, whichever
@@ -97,7 +105,7 @@ Set the public directory URL when publishing so the initial HTML contains
 absolute Open Graph page and image URLs:
 
 ```sh
-groma export ./site/architecture/blueprint --url https://example.com/architecture/blueprint/
+groma export ./site/architecture/blueprint --url https://example.com/architecture/blueprint/ --ack-source-export
 ```
 
 Without `--url`, the export remains portable with a relative light-cover link and

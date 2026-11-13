@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { CodeSymbol, ScannerPlugin } from '@groma/scanner'
 import { buildPackage } from '../plugins/scanners/php/build.ts'
 import manifest from '../plugins/scanners/php/package.json'
 import { discoverScanners } from '../src/scanner/modules/discovery.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import { loadAnnotatedArchitecture, reconcileScanObservations } from '../src/core.ts'
 import { loadArchitecture } from '../src/architecture-reader.ts'
@@ -95,8 +95,8 @@ test.concurrent('PHP reads the Composer commands its include list names, with an
 test.concurrent('lint finds identical and near-duplicate PHP functions and methods but never closures', async () => {
   const { temporary, root, artifact } = await setup('php-duplicates')
   try {
-    await addScanner(root, artifact)
-    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), 'lint'],
+    await addFixtureScanner(root, artifact)
+    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'],
       { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)
@@ -119,8 +119,8 @@ test.concurrent('lint finds identical and near-duplicate PHP functions and metho
 test.concurrent('a component outlines its PHP files beside a TypeScript file under the PHP declaration rules', async () => {
   const { temporary, root, artifact, scanner } = await setup('php-outline')
   try {
-    await addScanner(root, artifact)
-    await addScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact)
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
     // The fixture's Code symbols are names the scan reports, so entries follow the scan's naming.
@@ -128,7 +128,7 @@ test.concurrent('a component outlines its PHP files beside a TypeScript file und
     const named = component.code.flatMap(reference => reference.scanner === 'php' && reference.symbol ? [reference.symbol] : [])
     expect(named).toHaveLength(3)
     expect(scanned).toEqual(expect.arrayContaining(named))
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual([...new Set(component.code.map(reference => reference.file))])
     const symbol = ({ name, line, visibility, entry }: CodeSymbol) => [name, line, visibility, entry]
     const php = files.filter(file => file.file.endsWith('.php')).map(file => file.declarations.map(declaration => [
@@ -203,7 +203,7 @@ test.concurrent('the PHP scan reads nothing the default exclusions name', async 
 test.concurrent('PHP source edits and new files refresh through the installed live scanner session', async () => {
   const { temporary, root, artifact } = await setup()
   let completed: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { completed?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { completed?.() } })
   try {
     await session.change({ action: 'add', source: artifact })
     expect(session.state.plugins.find(scanner => scanner.id === 'php')?.status).toBe('ready')

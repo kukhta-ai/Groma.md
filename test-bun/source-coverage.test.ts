@@ -1,14 +1,11 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-import { parseListWindow } from '../src/list-window.ts'
-import { renderPlainRecord } from '../src/plain-world.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 
-const window = parseListWindow({}, [])
 const sources = ['src/kept.ts', 'src/notes.txt', 'scripts/hidden.ts', 'src/keep.generated.ts']
 
 async function write(root: string, file: string, content: string): Promise<void> {
@@ -37,14 +34,17 @@ async function repository(): Promise<string> {
   const child = Bun.spawn(['git', 'init', '--quiet'], { cwd: root, stdout: 'ignore', stderr: 'pipe' })
   expect(await child.exited, await new Response(child.stderr).text()).toBe(0)
   const listed = ['src/kept.ts', 'scripts/hidden.ts', 'src/keep.generated.ts']
-  for (const id of ['first', 'second']) await addScanner(root, await plugin(root, id, `return ${JSON.stringify(listed)}`))
+  for (const id of ['first', 'second']) await addFixtureScanner(root, await plugin(root, id, `return ${JSON.stringify(listed)}`))
   return root
 }
 
 async function reason(root: string, target: string): Promise<string> {
-  const result = await renderPlainRecord(root, target, true, window)
-  expect(result.ok).toBeFalse()
-  return result.ok ? '' : result.message
+  const child = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'),
+    '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'view', '--plain', '--', target],
+    { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+  const [code, output, error] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+  expect(code).toBe(1)
+  return output + error
 }
 
 test.concurrent('a target outside the repository listing is reported as such, not as a coverage gap', async () => {
@@ -52,7 +52,7 @@ test.concurrent('a target outside the repository listing is reported as such, no
   try {
     expect(await reason(root, 'src/kpet.ts')).toContain('not a repository file')
     expect(await reason(root, 'compnents')).toContain('not a repository file')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('an excluded file names the configured pattern that hides it', async () => {
@@ -61,7 +61,7 @@ test.concurrent('an excluded file names the configured pattern that hides it', a
     const config = await readGromaConfig(root)
     await writeGromaConfig(root, { ...config, exclude: ['**/*.md', '/scripts/'] })
     expect(await reason(root, 'scripts/hidden.ts')).toContain('pattern /scripts/')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a pattern decides with the whole list, so a later negation restores its file, in one scanner\'s own list for that scanner alone', async () => {
@@ -77,7 +77,7 @@ test.concurrent('a pattern decides with the whole list, so a later negation rest
     const answer = await reason(root, 'scripts/hidden.ts')
     expect(answer).toContain('read by first')
     expect(answer).toContain('excluded for second')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a repository file no scanner selects is separated from one waiting for a scan', async () => {
@@ -85,13 +85,13 @@ test.concurrent('a repository file no scanner selects is separated from one wait
   try {
     expect(await reason(root, 'src/notes.txt')).toContain('no enabled scanner reads it')
     expect(await reason(root, 'src/kept.ts')).toContain('read by first, second')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a scanner whose listing fails is named beside the other scanners\' answer', async () => {
   const root = await repository()
   try {
-    await addScanner(root, await plugin(root, 'broken', "throw new Error('Cargo.toml is unreadable\\nat line 2')"))
+    await addFixtureScanner(root, await plugin(root, 'broken', "throw new Error('Cargo.toml is unreadable\\nat line 2')"))
     const kept = await reason(root, 'src/kept.ts')
     expect(kept).toContain('read by first, second')
     expect(kept).toContain('broken could not list its sources: Cargo.toml is unreadable')
@@ -99,5 +99,5 @@ test.concurrent('a scanner whose listing fails is named beside the other scanner
     const notes = await reason(root, 'src/notes.txt')
     expect(notes).toContain('broken could not list its sources: Cargo.toml is unreadable')
     expect(notes).not.toContain('no enabled scanner')
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

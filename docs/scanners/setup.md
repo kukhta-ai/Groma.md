@@ -19,22 +19,20 @@ recommendation has one **Install** button; multiple recommendations also offer
 A warning appears only when scanning needs attention and opens the affected
 scanner in Settings. Potential duplicates belong to the separate Project review.
 
-**Install** selects a published stable release for this groma.md version and
-computer, saves its exact version, and scans. **Install recommended scanners**
-performs that flow for all current recommendations. **Install missing plugins**
-selects the newest compatible releases of configured npm scanners, restores
-other missing plugins, and scans. Both actions keep successful installations if
-another package fails; Retry attempts the remaining work.
+**Install** resolves a compatible stable release, stages its exact bytes without
+lifecycle scripts, and shows package identity and content digest for approval.
+Only confirmed content is selected and scanned. **Install recommended scanners**
+proposes all current recommendations as one batch; **Install missing plugins**
+restores the exact configured sources. A batch must stage completely before its
+one-time confirmation. A failed proposal activates no partial batch.
 
-Scans and live maps start immediately with installed scanners. The project's
-`automaticUpdates` setting defaults to `true`; **Automatic updates** in Plugins
-(web checkbox or terminal `t`) changes it. Opening Plugins rechecks in the
-background without waiting for the registry. `false` disables background
-updates and their follow-up scan. npm update checks run in the background; offline use keeps the installed versions working. Once
-updates finish, Groma records their versions and runs the normal scan again, so
-the open map refreshes through its existing architecture watcher. Project
-settings and include/exclude lists stay unchanged. File edits alone do not
-check npm.
+Scans and live maps use already approved installed scanners. The project's
+`automaticUpdates` setting defaults to `false`; **Check for updates automatically**
+in Plugins (web checkbox or terminal `t`) enables metadata checks. An enabled
+check can show a newer release but cannot download replacement SDKs, change
+selections or rescan. Opening Plugins shares any metadata check already running.
+Offline use keeps approved installed versions working. File edits alone do not
+check npm. Explicit Update requires reviewing the proposed exact content.
 
 **Add plugin** accepts a package name, exact npm version, Git source or local
 package path. Bare names use the same published-release selection. For a missing
@@ -42,11 +40,10 @@ local package, restore its directory. **Remove from project** keeps saved
 architecture. For npm scanners, **Update** installs the newest compatible stable
 release and saves its exact version. Opening web settings checks for newer
 compatible releases and shows the installed and available versions with **Update**
-on the row. The button installs that shown version. An available upgrade does not
+on the row. The button proposes that shown version for explicit content approval. An available upgrade does not
 raise a scan warning. Update check errors appear in Details without changing scan
 readiness. **Remove from project** and **Choose version** are in Details.
-**Choose version** selects an exact version of the same package. With
-`automaticUpdates` enabled, background updates can replace it. Git updates
+**Choose version** selects an exact version of the same package. Background checks cannot replace it. Git updates
 require a tag or commit in the same repository and keep that revision.
 
 Release selection and download both use the package manager built into groma.md,
@@ -60,7 +57,7 @@ The `proxy` and `https-proxy` keys of `.npmrc` are not read, and neither is a
 
 Git scanner sources and Git dependencies use native Git settings unchanged, including
 CA files and directories, certificate verification, HTTPS and HTTP proxies, URL
-rewrites and authentication. Groma does not replace Git trust stores or block
+rewrites and authentication; staging disables Git hooks. Groma does not replace Git trust stores or block
 HTTPS proxies. Maintain Git and its trust store in the environment that runs it.
 
 The CLI uses the same release selection:
@@ -94,7 +91,8 @@ The live session starts its source watch before the first scan. Edits made durin
 that scan wait for the current batch to finish.
 The live session watches relevant source declarations through the scanner adapter,
 including with no scanner selected so new projects can appear in settings. Only
-installed project selections without known metadata incompatibilities execute scans.
+approved project selections with unchanged captured content and without known
+metadata incompatibilities execute scans.
 An incompatible groma.md API version blocks the plugin before its
 code is loaded, including preparation checks. Settings show the reason; other
 eligible scanners can still run. An empty observation set does not
@@ -113,12 +111,12 @@ project declarations, evidence locations, package availability, and coverage
 gaps, then offers the installable packages in one selection. The browser saves
 project settings first, then shows the same proposal with package checkboxes
 before scanning. Existing scanner selections are retained. Clear a new package selection to decline it.
-Browser windows share a pending setup step. Submitting it from two windows runs
-installation and the first scan once; both windows wait for the same result.
-If an installation fails, setup keeps successful installations and refreshes
-the browser selection. Submit the remaining selection again to retry; scanners
-already saved in the project stay selected. Their installed versions run immediately,
-and background checks download available npm updates when enabled.
+Each browser session receives its own five-minute, one-time content proposal.
+Another window cannot confirm that session's proposal. The exact original staged
+bytes are used on confirmation. Selection conflicts require reviewing again.
+The terminal setup flow retains successful individual selections when a later
+selection fails. Web batches stage completely before confirmation. Previously
+approved installed versions run immediately; background checks only notify.
 
 Run the journey again after project technologies change:
 
@@ -127,8 +125,8 @@ groma scanner setup
 ```
 
 Setup adds only selected scanners. `config.json` in the selected architecture
-directory records their resolved package versions; background checks refresh npm
-selections automatically when enabled. Disable an existing scanner explicitly with
+directory records their exact resolved package versions; background checks never
+change these selections. Disable an existing scanner explicitly with
 `groma plugin remove <id>`.
 
 ## Package availability and project readiness
@@ -153,7 +151,8 @@ inputs. Framework scanners use their own compiler tools. A supported fresh
 checkout needs no installed project dependencies, build output, or separately
 installed language SDK. Missing external types remain unresolved facts.
 
-If scanner assets are missing, reinstall the scanner package. Correct invalid
+If approved scanner assets are missing, restore the exact frozen SDK. Modified
+content is blocked and must be reviewed through an explicit Update. Correct invalid
 source or unsupported configuration according to its diagnostic. Failed scanners
 retain their saved evidence while successful scanners update architecture.
 Missing or unselected packages do not prevent other selections from running.
@@ -171,18 +170,20 @@ groma init 'My project' --directory groma
 groma scanner setup --no-interactive
 ```
 
-Install a scanner with `groma plugin add <package>`; it selects a published
-compatible release. For a project whose scanner configuration is already
-committed, CI prepares the current npm scanners and checks them with:
+Interactive `groma plugin add <package>` selects a compatible release and asks
+for explicit approval of its identity and complete content digest. Unattended
+commands require a separately reviewed user-owned authority outside Git. See
+[executable plugin approval](trust.md) for provisioning and frozen restoration.
+Once CI has provisioned exact approved SDKs:
 
 ```sh
-groma plugin install
-groma scanner check
-groma scan
+groma --plugin-approvals /absolute/private/plugin-approvals.json scanner check
+groma --plugin-approvals /absolute/private/plugin-approvals.json scan
 ```
 
-Local scanner paths remain available for development through `plugin add`;
-they do not establish that an official public release exists.
-Restoring also checks local selections and fails with the missing directory
-when one is unavailable. To share a local scanner with colleagues, commit its
-runnable package and select a path relative to the repository.
+Local scanner paths remain available for development through `plugin add`.
+Groma captures their runnable package bytes into a retained directory and rejects
+changes to the original source before import. Update explicitly reviews those
+changes. Commit or distribute the runnable package to share it; each computer
+still needs its own explicit content approval. A local path does not establish
+that an official public release exists.

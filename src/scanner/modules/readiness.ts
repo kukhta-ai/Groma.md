@@ -13,9 +13,9 @@ export interface ProjectReadiness {
 }
 
 async function sourceReadiness(
-  root: string, module: FoundScannerModule, config: GromaConfig, listing: readonly string[],
+  root: string, module: FoundScannerModule, config: GromaConfig, listing: readonly string[], options: ScannerResolutionOptions,
 ): Promise<Pick<ProjectReadiness, 'project' | 'message'>> {
-  const scanner = await configuredPlugin(module, config)
+  const scanner = await configuredPlugin(root, module, config, options)
   if (scanner.plugin.checkReadiness === undefined) return { project: 'unchecked',
     message: 'No readiness check; project compatibility is established during scan.' }
   if (allExcluded(listing, scanner)) {
@@ -49,7 +49,7 @@ export async function checkScannerReadiness(
     }
     try {
       results.push({ id: module.id, package: 'found',
-        ...await sourceReadiness(root, module, config, listing) })
+        ...await sourceReadiness(root, module, config, listing, options) })
     } catch (error) {
       results.push({ id: module.id, package: 'found', project: 'blocked',
         message: error instanceof Error ? error.message : String(error) })
