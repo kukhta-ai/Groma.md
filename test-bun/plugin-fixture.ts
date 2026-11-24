@@ -11,7 +11,7 @@ export function pluginFixtureOptions(root: string): ScannerInstallOptions {
 }
 
 export async function closePluginFixture(root: string): Promise<void> {
-  await Promise.all([root, `${root}-plugins`].map(directory => rm(directory, { recursive: true, force: true })))
+  await Promise.all([root, `${root}-plugins`].map(directory => rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })))
 }
 
 /** The reviewed test builder bundles the monorepo SDK; an arbitrary plugin never gets a pre-consent build. */

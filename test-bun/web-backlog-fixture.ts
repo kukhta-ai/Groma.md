@@ -30,7 +30,7 @@ export async function webBacklogRegistry(root: string) {
       await writeFile(path.join(packed, nativeFile), `#!/bin/sh\nprintf 'executed\\n' >> ${shellQuote(executed)}\nprintf '%s\\n' '${version}'\n`, { mode: 0o755 })
     }
     const archive = path.join(owned, `${name}.tgz`)
-    const child = Bun.spawn(['tar', '-czf', archive, '-C', directory, 'package'], { stdout: 'ignore', stderr: 'pipe' })
+    const child = Bun.spawn(['tar', '-czf', `../${path.basename(archive)}`, 'package'], { cwd: directory, stdout: 'ignore', stderr: 'pipe' })
     const errors = await new Response(child.stderr).text()
     if (await child.exited !== 0) throw new Error(`Cannot create Backlog fixture archive: ${errors}`)
     archives.set(name, await readFile(archive))

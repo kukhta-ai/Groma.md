@@ -305,8 +305,14 @@ export async function retainStagedScanner(staged: StagedScannerPackage, cacheRoo
   await mkdir(cacheRoot, { recursive: true, mode: 0o700 })
   try { await rename(staged.package.contentRoot, destination) }
   catch (error) {
-    if (!['EEXIST', 'ENOTEMPTY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
-    if (await pluginContentIntegrity(destination) !== staged.integrity) throw new Error('Stored approved scanner content changed')
+    if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+    let integrity: string
+    try { integrity = await pluginContentIntegrity(destination) }
+    catch (inspectionError) {
+      if ((inspectionError as NodeJS.ErrnoException).code === 'ENOENT') throw error
+      throw inspectionError
+    }
+    if (integrity !== staged.integrity) throw new Error('Stored approved scanner content changed')
   }
   const resolved = await resolveScannerPackage(staged.source, cacheRoot, destination)
   if (!resolved || await pluginContentIntegrity(destination) !== staged.integrity) throw new Error('Confirmed scanner content changed while retaining it')

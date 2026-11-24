@@ -4,7 +4,7 @@ title: Protect local Groma web access executable plugins and confidential export
 status: In Progress
 assignee: []
 created_date: '2026-11-13 06:09'
-updated_date: '2026-11-13 16:21'
+updated_date: '2026-11-24 22:49'
 labels: []
 dependencies: []
 modified_files:
@@ -133,6 +133,16 @@ CI43456996149 on immutable ad95fd4: Linux full repository check passes1005 viewe
 Focused Bun1.4.4 owned-scratch probe reproduces the original cp behavior: the copied Java-style legal link escapes the package and is rejected. With verbatimSymlinks:true the copied root has exactly the original content digest; changing the linked target changes that digest. Integrity code and confinement checks are unchanged. Existing Java registered-scanner failures provide the end-to-end regression cases; full platform CI still required.
 
 Full Linux CIcd73635 again reaches1005 passed24 conditional skips2 Java registration failures. The development build copy is now correct, but each of the two existing tests independently copies GROMA_TEST_JAVA_PACKAGE into its artifact root with default cp, rewriting the same internal links before consent. Extend the same verbatim link preservation to these two fixture copies; retain all existing behavioral assertions and source-confinement checks. Standalone/npm build checks, fresh-checkout scanner-package checks and C# worker checks already passed on cd73635. Full revised platform CI remains required.
+
+Resume2026-11-24: full dd9b613 CI passes Linux, Windows has6 failures, macOS cancelled. Two npm update failures rename into an already retained identical content cache and Windows reports EPERM instead of EEXIST/ENOTEMPTY. Extend only existing-target reuse handling: verify complete digest before reusing it, propagate missing destination/original failure and reject changed bytes. Three other failures are owned fixture cleanup EPERM; use the native bounded recursive rm lifecycle options (3 retries,100ms) after existing awaited scanner work, preserving cleanup failure reporting. Backlog web fixture tar also needs cwd-relative output and input paths. Existing update, outline/exclusion and web startup tests reproduce these failures; keep assertions and scope. No publication or reduced gates.
+
+Changed src/scanner/modules/package.ts: Windows EPERM can reuse only an existing digest-identical retained destination; absent destination still propagates the rename failure. Path is already present in the complete modified-file list.
+
+Changed existing tracked test-bun/plugin-fixture.ts: bounded native recursive removal handles transient Windows filesystem EPERM and still rejects persistent cleanup errors. No test execution retries added.
+
+Changed existing tracked test-bun/web-backlog-fixture.ts: tar receives a relative archive filename and cwd=package parent, avoiding Windows drive-letter interpretation. No assertions removed.
+
+Focused qualification after Windows fixes: frozen Bun1.4.4 restore completed with unchanged bun.lock; full TypeScript check passes and scoped Biome lint passes. Four real Bun files (plugin approval, scanner update, web startup, scanner exclusions) pass42 tests/346 assertions. Independent targeted review found no weakening of exact-byte approval or Restore: EPERM reuses only a complete digest-identical target, missing target propagates original error, persistent cleanup errors fail. Native Windows and macOS results still require fresh full CI. No publication or merge.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done
