@@ -4,7 +4,7 @@ title: Protect local Groma web access executable plugins and confidential export
 status: In Progress
 assignee: []
 created_date: '2026-11-13 06:09'
-updated_date: '2026-11-24 22:49'
+updated_date: '2026-11-24 23:02'
 labels: []
 dependencies: []
 modified_files:
@@ -143,6 +143,12 @@ Changed existing tracked test-bun/plugin-fixture.ts: bounded native recursive re
 Changed existing tracked test-bun/web-backlog-fixture.ts: tar receives a relative archive filename and cwd=package parent, avoiding Windows drive-letter interpretation. No assertions removed.
 
 Focused qualification after Windows fixes: frozen Bun1.4.4 restore completed with unchanged bun.lock; full TypeScript check passes and scoped Biome lint passes. Four real Bun files (plugin approval, scanner update, web startup, scanner exclusions) pass42 tests/346 assertions. Independent targeted review found no weakening of exact-byte approval or Restore: EPERM reuses only a complete digest-identical target, missing target propagates original error, persistent cleanup errors fail. Native Windows and macOS results still require fresh full CI. No publication or merge.
+
+Native macOS CI7f4be04 reports one fixture mismatch: the security ledger correctly stores canonical /private/var project paths, but the shared-authority test expects raw /var aliases. Canonicalize the existing fixture base at creation; preserve both project identities and cross-project denial assertions. Production authority logic is unchanged. Wait for Windows results before batching the final fork revision.
+
+Changed already tracked test-bun/plugin-approval.test.ts: canonical realpath fixture base makes ledger identity expectations portable to macOS temp-directory aliases; no assertions removed.
+
+Canonical macOS fixture correction passes13 real plugin-approval tests/53 assertions locally; existing refusal and cross-project binding assertions unchanged. Linux full CI7f4be04 passed. macOS full CI had only the raw /var versus canonical /private/var expectation failure. Windows full result still running; preserve that run for native defect evidence while the corrected fixture enters a fresh full CI.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done

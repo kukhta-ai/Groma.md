@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
@@ -12,7 +12,7 @@ import { createScannerSession } from '../src/scanner/session.ts'
 import { pluginResponse } from '../src/viewers/web/plugin-routes.ts'
 
 async function fixture() {
-  const base = await mkdtemp(path.join(tmpdir(), 'groma-approval-'))
+  const base = await realpath(await mkdtemp(path.join(tmpdir(), 'groma-approval-')))
   const root = path.join(base, 'project'), source = path.join(base, 'scanner')
   await cp(path.resolve(import.meta.dir, '../test/fixtures/flows'), root, { recursive: true })
   await mkdir(source)
