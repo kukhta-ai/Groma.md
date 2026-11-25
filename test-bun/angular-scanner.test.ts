@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { ScannerPlugin, SourceReference } from '@groma/scanner'
 import { buildPackage } from '../plugins/scanners/angular/build.ts'
 import manifest from '../plugins/scanners/angular/package.json'
@@ -179,7 +180,7 @@ test.concurrent('Angular packages class, template and declared styles as one sou
 test.concurrent('the live scanner session refreshes a component when its external stylesheet changes', async () => {
   const { temporary, root, artifact } = await setup()
   let complete: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { complete?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { complete?.() } })
   try {
     await session.change({ action: 'add', source: artifact })
     expect(session.state.plugins.find(scanner => scanner.id === 'angular')?.status).toBe('ready')
@@ -230,13 +231,11 @@ test.concurrent('the built Angular package and the TypeScript scanner outline a 
 test.concurrent('a file Angular and TypeScript both own shows one outline', async () => {
   const { temporary, root, artifact, scanner } = await outlineSetup()
   try {
-    await writeFile(path.join(root, 'groma/config.json'), JSON.stringify({ scanners: [
-      { id: 'typescript', source: path.resolve(import.meta.dir, '../plugins/scanners/typescript'), include: typescriptManifest.groma.scanner.include },
-      { id: 'angular', source: artifact, include: manifest.groma.scanner.include },
-    ] }))
+    await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))
+    await addFixtureScanner(root, artifact)
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
-    const files = await readCodeStructure(root, world, null, component.representationId)
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root))
 
     // The component's Code lists this source under both scanners; only the TypeScript link names ProfileComponent.
     expect(files).toEqual(await scanner.readCodeStructure!(root, [{ file: 'profile.component.ts', symbols: ['ProfileComponent'] }]))

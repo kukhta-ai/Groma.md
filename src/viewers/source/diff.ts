@@ -1,5 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
+import { readConfinedSource } from '../../history/snapshots.ts'
 
 import {
   currentGitRevision,
@@ -24,7 +23,7 @@ export interface TaskDiffPayload {
 
 async function workingText(repositoryRoot: string, filename: string): Promise<string | undefined> {
   try {
-    return await readFile(path.join(repositoryRoot, filename), 'utf8')
+    return await readConfinedSource(repositoryRoot, filename)
   } catch {
     return undefined
   }

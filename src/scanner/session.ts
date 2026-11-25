@@ -5,7 +5,7 @@ import { readGromaConfig } from '../config.ts'
 import type { ScanSummary } from '../types.ts'
 import type { ProjectReadiness } from './modules/readiness.ts'
 import { changePluginSettings, readPluginSettings, type PluginSettings, type PluginSettingsAction } from '../plugins/settings.ts'
-import { updateNpmScanners, type ScannerInstallOptions } from './modules/inventory.ts'
+import { checkNpmScannerUpdates, type ScannerInstallOptions } from './modules/inventory.ts'
 
 export type ScannerProgress =
   | { phase: 'preparing-scanners' | 'updating-architecture' }
@@ -91,9 +91,10 @@ export async function createScannerSession(root: string, options: {
     serial = next.catch(() => {})
     return next
   }
-  function reconfigure() {
+  function reconfigure(force = false) {
     return enqueue(async () => {
-      if (await scannerSignature(root) !== scannerConfig) await start(true)
+      if (force) await options.onPluginsChanged?.()
+      if (force || await scannerSignature(root) !== scannerConfig) await start(true)
       else await refresh()
     })
   }
@@ -103,7 +104,11 @@ export async function createScannerSession(root: string, options: {
     if (closed) return Promise.resolve()
     if (updateCheck) return updateCheck
     updateCheck = ready.then(async () => {
-      if (!closed && await updateNpmScanners(root, { ...options, signal: updates.signal })) await reconfigure()
+      const available = await checkNpmScannerUpdates(root, { ...options, signal: updates.signal })
+      if (!closed && available.length) publish({ ...state, upgrades: Object.fromEntries(available.flatMap(item => {
+        const source = state.plugins.find(plugin => plugin.id === item.id)?.source
+        return source ? [[source, { version: item.source.slice(item.source.lastIndexOf('@') + 1) }]] : []
+      })) })
     }, () => {}).catch(error => { if (!closed) return report(error) }).finally(() => { updateCheck = undefined })
     return updateCheck
   }
@@ -127,7 +132,7 @@ export async function createScannerSession(root: string, options: {
     refresh,
     checkUpdates,
     reconfigure,
-    change(action: PluginSettingsAction) {
+    change(action: PluginSettingsAction, consent?: ScannerInstallOptions['confirm']) {
       return enqueue(async () => {
         if (action.action === 'automatic-updates') {
           await changePluginSettings(root, action, options)
@@ -137,7 +142,7 @@ export async function createScannerSession(root: string, options: {
         // Stop in-flight evidence before a new selection can own source updates.
         await watcher?.close()
         watcher = undefined
-        try { await changePluginSettings(root, action, options); await options.onPluginsChanged?.() }
+        try { await changePluginSettings(root, action, { ...options, ...(consent ? { confirm: consent } : {}) }); await options.onPluginsChanged?.() }
         catch (error) { await start(true); throw error }
         await start(true)
       }, true)

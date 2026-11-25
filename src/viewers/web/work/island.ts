@@ -1,3 +1,4 @@
+import { escaped } from '../atoms/escape.ts'
 import type { WorkPin } from '../../../work/pins.ts'
 import type { WorkSnapshot } from '../../../types.ts'
 import type { Tip } from '../organisms/tip.ts'
@@ -74,7 +75,7 @@ function button(className: string, html: string, onClick: () => void): HTMLButto
 }
 
 function chip(pin: WorkPin, finishingAt: number | undefined, onToggle: (id: string) => void, tip: Tip): HTMLButtonElement {
-  const node = button('chip', `${WORK_BADGE}<span>${pin.taskId}</span>`, () => onToggle(pin.taskId))
+  const node = button('chip', `${WORK_BADGE}<span>${escaped(pin.taskId)}</span>`, () => onToggle(pin.taskId))
   node.dataset.task = pin.taskId
   node.style.setProperty('--pin', pin.colour)
   node.dataset.tip = `${pin.assignee ?? 'Unassigned'} · ${pin.title}`
@@ -117,7 +118,7 @@ export function createWorkIsland(
 
   const toggle = (status: string): HTMLButtonElement => {
     const pressed = statusFilters?.enabled.includes(status) ?? false
-    const node = button('toggle', `${EYE_MARK}${status}`, () => {
+    const node = button('toggle', `${EYE_MARK}${escaped(status)}`, () => {
       statusFilters = toggleWorkStatus(statusFilters!, status)
       onShow(statusFilters.enabled)
       rebuild()

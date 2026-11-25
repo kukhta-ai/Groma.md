@@ -1,15 +1,8 @@
-import { fileURLToPath } from 'node:url'
-import { readGromaConfig } from '../config.ts'
-import { parseScannerSource } from './modules/package.ts'
+import { checkNpmScannerUpdates } from './modules/inventory.ts'
 
-/** A one-shot CLI scan can exit while this independent update-and-scan job finishes. */
+/** Optional release metadata checks notify without replacing approved content or starting a scan. */
 export async function startBackgroundScannerUpdates(root: string): Promise<void> {
-  const config = await readGromaConfig(root)
-  if (config.automaticUpdates === false) return
-  if (!config.scanners.some(scanner => parseScannerSource(root, scanner.source).kind === 'npm')) return
-  const entry = Bun.isStandaloneExecutable ? [] : [fileURLToPath(new URL('../cli.ts', import.meta.url))]
-  const child = Bun.spawn([process.execPath, ...entry, 'scanner', 'refresh'], {
-    cwd: root, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore', detached: true,
-  })
-  child.unref()
+  for (const update of await checkNpmScannerUpdates(root)) {
+    console.info(`Plugin update available: ${update.id} ${update.source}. Review it with groma plugin update.`)
+  }
 }

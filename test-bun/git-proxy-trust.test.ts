@@ -34,7 +34,7 @@ async function run(method: Method, f: Fixture, remote: string, env: NodeJS.Proce
   const scanner = pathToFileURL(path.resolve(import.meta.dir, '../src/scanner/modules/package.ts')).href
   const source = method === 'install'
     ? `import { installDependencies } from ${JSON.stringify(manager)}; await installDependencies(process.cwd(), 'proxy fixture');`
-    : `import { parseScannerSource, installScannerPackage } from ${JSON.stringify(scanner)}; await installScannerPackage(parseScannerSource(process.cwd(), ${JSON.stringify(`git+${remote}#fixture`)}), process.cwd() + '/cache');`
+    : `import { parseScannerSource, stageScannerPackage } from ${JSON.stringify(scanner)}; await stageScannerPackage(parseScannerSource(process.cwd(), ${JSON.stringify(`git+${remote}#fixture`)}));`
   await writeFile(path.join(f.project, 'package.json'), JSON.stringify({ dependencies: { fixture: `git+${remote}` } }))
   return execute(process.execPath, ['-e', source], f.project, {
     ...env, BUN_INSTALL_CACHE_DIR: path.join(f.home, `cache-${method}-${crypto.randomUUID()}`),

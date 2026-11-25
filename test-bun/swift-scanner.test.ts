@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { ScannerPlugin } from '@groma/scanner'
 import { buildPackage, prepareWindowsSwiftPackage, windowsSwiftPackageRoot } from '../plugins/scanners/swift/build.ts'
 import manifest from '../plugins/scanners/swift/package.json'
 import { discoverScanners } from '../src/scanner/modules/discovery.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import { loadScannerRegistry } from '../src/scanner/registry.ts'
 import { loadAnnotatedArchitecture, reconcileScanObservations } from '../src/core.ts'
@@ -179,7 +179,7 @@ test.concurrent('installed Swift package runs without SDKs and excludes source t
     expect(errors).not.toContain('.xctoolchain/')
     expect(await readFile(path.join(root, 'Ledger.swift'), 'utf8')).toBe(before)
 
-    await addScanner(root, artifact)
+    await addFixtureScanner(root, artifact)
     const configPath = path.join(root, 'groma/config.json')
     const config = JSON.parse(await readFile(configPath, 'utf8'))
     // The entry holds the package defaults, which exclude Pods and Carthage, and restores Carthage.
@@ -192,7 +192,7 @@ test.concurrent('installed Swift package runs without SDKs and excludes source t
     await writeFile(path.join(root, 'Carthage/Restored.swift'), 'func restored() {}\n')
     await writeFile(path.join(root, '.gitignore'), 'Ignored.swift\n')
     await writeFile(path.join(root, 'Ignored.swift'), 'func bad(')
-    const registry = await loadScannerRegistry(root)
+    const registry = await loadScannerRegistry(root, pluginFixtureOptions(root))
     const batch = await registry.collectObservations(root)
     expect(batch.failures).toHaveLength(0)
     expect(batch.observations[0]!.files.map(file => file.file)).toEqual(['Carthage/Restored.swift', 'Ledger.swift'])
@@ -210,7 +210,7 @@ test.concurrent('installed Swift package runs without SDKs and excludes source t
 test.concurrent('Swift edits and new files refresh the installed scanner session', async () => {
   const { temporary, root, artifact } = await setup()
   let completed: (() => void) | undefined
-  const session = await createScannerSession(root, { onFold() { completed?.() } })
+  const session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { completed?.() } })
   try {
     await session.change({ action: 'add', source: artifact })
     const before = await loadAnnotatedArchitecture(root)

@@ -97,7 +97,7 @@ groma view src/orders.ts    # the owner of this file and its relationships
 - <img src=".github/assets/features/drafts.svg" width="20" height="20" alt=""> **Drafts.** Sketch systems, containers, and components before they exist. They appear dashed beside the real ones until a scan matches their code and you accept them. [Draft lifecycle](docs/product-model.md#drafts)
 - <img src=".github/assets/features/work.svg" width="20" height="20" alt=""> **See work across the architecture.** Backlog.md tasks pin where people and agents are working; select one to highlight the components it touches and inspect its changes without leaving the map. [Task links](docs/agent-instructions/backlog.md)
 - <img src=".github/assets/features/history.svg" width="20" height="20" alt=""> **Explore history and compare commits.** Open any earlier revision with its source, or compare two commits (or uncommitted changes) on the map to see added, modified, and removed components and relationships.
-- <img src=".github/assets/features/publish.svg" width="20" height="20" alt=""> **Publish a static site.** `groma export ./site` exports a standalone, read-only map of your working tree, a commit, or a commit comparison that you can host anywhere. [Static publication](docs/viewers/web/index.md#static-publication)
+- <img src=".github/assets/features/publish.svg" width="20" height="20" alt=""> **Export a static site.** `groma export ./site --ack-source-export` exports a standalone, read-only map of your working tree, a commit, or a commit comparison. It contains complete source texts; keep it private until its disclosure is reviewed. [Static publication](docs/viewers/web/index.md#static-publication)
 
 ## Plain Markdown, C4, OKF
 

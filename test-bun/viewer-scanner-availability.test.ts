@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { approveConfiguredScanners, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { loadAnnotatedArchitecture } from '../src/core.ts'
 import { writeGromaConfig } from '../src/config.ts'
 import { scanRepository, watchScan } from '../src/scanner.ts'
@@ -41,15 +42,18 @@ for (const missing of [false, true]) {
     const root = await setup()
     try {
       const other = await plugin(root, 'other')
-      await writeGromaConfig(root, { scanners: [other, ...(missing ? [{ id: 'typescript', source: path.join(root, 'missing'), include: ['**/*.ts'] }] : [])], workSources: [] })
+      await writeGromaConfig(root, { scanners: [other], workSources: [] })
+      await approveConfiguredScanners(root)
+      if (missing) await writeGromaConfig(root, { scanners: [other,
+        { id: 'typescript', source: path.join(root, 'missing'), include: ['**/*.ts'] }], workSources: [] })
       const records = await snapshot(root)
       const before = await loadAnnotatedArchitecture(root)
       expect(before.relationships.length).toBeGreaterThan(0)
-      await scanRepository(root)
+      await scanRepository(root, pluginFixtureOptions(root))
       expect(await readFile(path.join(root, 'other.called'), 'utf8')).toBe('scanned')
       expect(await snapshot(root)).toEqual(records)
       expect((await loadAnnotatedArchitecture(root)).relationships).toEqual(before.relationships)
-    } finally { await rm(root, { recursive: true, force: true }) }
+    } finally { await closePluginFixture(root) }
   })
 }
 
@@ -58,11 +62,11 @@ test.concurrent('empty scanning does not write saved data or start scan callback
   try {
     await writeGromaConfig(root, { scanners: [], workSources: [] })
     const before = await snapshot(root)
-    expect(await scanRepository(root)).toEqual({ created: 0, refreshed: 0, matched: 0 })
-    const watcher = await watchScan(root, { onFold() { throw new Error('empty scanner selection ran') } })
+    expect(await scanRepository(root, pluginFixtureOptions(root))).toEqual({ created: 0, refreshed: 0, matched: 0 })
+    const watcher = await watchScan(root, { ...pluginFixtureOptions(root), onFold() { throw new Error('empty scanner selection ran') } })
     await watcher.close()
     expect(await snapshot(root)).toEqual(before)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a live session reports failed tooling without preventing saved architecture access', async () => {
@@ -71,8 +75,9 @@ test.concurrent('a live session reports failed tooling without preventing saved 
   try {
     const scanner = await plugin(root, 'broken', true)
     await writeGromaConfig(root, { scanners: [scanner], workSources: [] })
+    await approveConfiguredScanners(root)
     const before = await snapshot(root)
-    session = await createScannerSession(root)
+    session = await createScannerSession(root, pluginFixtureOptions(root))
     await session.reconfigure()
     expect(session.state.notice.tone).toBe('error')
     expect(session.state.plugins[0]?.status).toBe('blocked')
@@ -81,7 +86,7 @@ test.concurrent('a live session reports failed tooling without preventing saved 
     await session.change({ action: 'remove', id: scanner.id })
     expect(session.state.plugins.some(item => item.id === scanner.id)).toBe(false)
     expect(await snapshot(root)).toEqual(before)
-  } finally { await session?.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { await session?.close(); await closePluginFixture(root) }
 })
 
 test.concurrent('watch startup rejects an invalid project config', async () => {
@@ -90,11 +95,11 @@ test.concurrent('watch startup rejects an invalid project config', async () => {
   const errors: unknown[] = []
   try {
     await writeFile(path.join(root, 'groma/config.json'), JSON.stringify({ scanners: false }))
-    const starting = watchScan(root, { onError: error => { errors.push(error) } }).then(started => {
+    const starting = watchScan(root, { ...pluginFixtureOptions(root), onError: error => { errors.push(error) } }).then(started => {
       watcher = started
       return started
     })
     await expect(starting).rejects.toThrow()
     expect(errors).toHaveLength(0)
-  } finally { await watcher?.close(); await rm(root, { recursive: true, force: true }) }
+  } finally { await watcher?.close(); await closePluginFixture(root) }
 })

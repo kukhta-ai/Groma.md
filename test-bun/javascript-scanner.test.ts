@@ -2,13 +2,13 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { CodeSymbol, ScannerPlugin, ScanOperation } from '@groma/scanner'
 import { buildPackage } from '../plugins/scanners/javascript/build.ts'
 import manifest from '../plugins/scanners/javascript/package.json'
 import typescriptManifest from '../plugins/scanners/typescript/package.json'
 import { scanTypeScriptSource } from '../plugins/scanners/typescript/src/scan.ts'
 import { discoverScanners } from '../src/scanner/modules/discovery.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 import { scannerFiles, scannerSelection } from '../src/scanner/modules/selection.ts'
 import { loadAnnotatedArchitecture, reconcileScanObservations } from '../src/core.ts'
 import { loadScannerRegistry } from '../src/scanner/registry.ts'
@@ -94,13 +94,13 @@ test.concurrent('a JavaScript scan keeps one owner per file across a rescan of c
 test.concurrent('configured exclusions and include patterns decide which JavaScript files reach the architecture', async () => {
   const { temporary, root, artifact } = await setup()
   try {
-    await addScanner(root, artifact)
+    await addFixtureScanner(root, artifact)
     const configFile = path.join(root, 'groma/config.json')
     const config = JSON.parse(await readFile(configFile, 'utf8'))
     await writeFile(configFile, JSON.stringify({ ...config, exclude: ['public/'] }))
     await writeFile(path.join(root, '.gitignore'), 'src/draft.js\n')
     await writeFile(path.join(root, 'src/draft.js'), 'export function draft() { return 1 }\n')
-    const registry = await loadScannerRegistry(root)
+    const registry = await loadScannerRegistry(root, pluginFixtureOptions(root))
     const batch = await registry.collectObservations(root)
     expect(batch.failures).toHaveLength(0)
     expect(batch.observations[0]!.files.map(file => file.file)).toEqual(['src/cart.mjs', 'src/panel.jsx', 'src/totals.cjs'])
@@ -120,7 +120,7 @@ test.concurrent('the scan reads a minified name a later pattern restores', async
     // A `.min` name is a default exclusion rather than a rule in code, so a `!` pattern restores it.
     const restored = { include: manifest.groma.scanner.include, exclude: [...manifest.groma.scanner.exclude, '!widget.min.js'] }
     expect((await javascript.scan(root, {}, await scannerFiles(root, restored)))!.files.map(file => file.file)).toEqual(['app.js', 'widget.min.js'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 // Windows reads a backslash as a separator, so no file there can carry the second name.
@@ -142,7 +142,7 @@ test.skipIf(process.platform === 'win32').concurrent('a JavaScript file keeps th
     expect(scan.httpEndpoints).toEqual([expect.objectContaining({ operation: two.id, order: { application: 'a\\b.js#app', position: 0 } })])
     // The entry imports `./c.js` from its own directory, the root; the parser's spelling would place it under `a/`.
     expect(scan.entryPoints).toEqual([expect.objectContaining({ file: 'a\\b.js', files: ['a\\b.js', 'c.js'] })])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('one body carries the same tokens whether it is written in JavaScript or in TypeScript', async () => {
@@ -163,8 +163,8 @@ test.concurrent('one body carries the same tokens whether it is written in JavaS
 test.concurrent('lint reports identical and near-duplicate JavaScript bodies but never callbacks or namesakes', async () => {
   const { temporary, root, artifact } = await setup('javascript-duplicates')
   try {
-    await addScanner(root, artifact)
-    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), 'lint'],
+    await addFixtureScanner(root, artifact)
+    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'],
       { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)
@@ -185,14 +185,14 @@ test.concurrent('lint reports identical and near-duplicate JavaScript bodies but
 test.concurrent('a component outlines its JavaScript files with module, CommonJS and script visibility', async () => {
   const { temporary, root, artifact, scanner } = await setup('javascript-outline')
   try {
-    await addScanner(root, artifact)
+    await addFixtureScanner(root, artifact)
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
     // The fixture's Code symbols are names the scan reports, so entries follow the scan's naming.
     const scanned = (await scanner.scan(root, {}, await javascriptFiles(root)))!.files.flatMap(file => file.symbols.map(symbol => symbol.name))
     const named = component.code.flatMap(reference => reference.symbol ? [reference.symbol] : [])
     expect(scanned).toEqual(expect.arrayContaining(named))
-    const files = await readCodeStructure(root, world, null, component.representationId) ?? []
+    const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
     expect(files.map(file => file.file)).toEqual([...new Set(component.code.map(reference => reference.file))])
     const symbol = ({ name, line, visibility, entry }: CodeSymbol) => [name, line, visibility, entry]
     const outline = files.map(file => file.declarations.map(declaration => [
@@ -245,7 +245,7 @@ test.concurrent('CommonJS publication and module use give declarations their rea
     expect(declaration('require.js')).toEqual([expect.objectContaining({ name: 'helper', visibility: 'private' })])
     expect(declaration('class.cjs')).toEqual([expect.objectContaining({ kind: 'type', name: 'Application', visibility: 'public',
       members: [expect.objectContaining({ name: 'constructor' }), expect.objectContaining({ name: 'use' })] })])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('calls inside accessors belong to the accessor without entering duplicate comparison', async () => {
@@ -259,5 +259,5 @@ test.concurrent('calls inside accessors belong to the accessor without entering 
     const owner = scan.operations!.find(operation => operation.id === call.source)!
     expect(owner.position).toBe(source.indexOf('get url'))
     expect(owner.tokens).toBeUndefined()
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

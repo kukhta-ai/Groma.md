@@ -14,7 +14,7 @@ import { inferRelationships } from '../src/relationship-inference.ts'
 import { composeInvocations } from '../src/scan-evidence.ts'
 import { scanRepository, formatScanReport } from '../src/scanner.ts'
 
-import { addScanner } from '../src/scanner/modules/inventory.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { scannerFiles } from '../src/scanner/modules/selection.ts'
 import typescriptManifest from '../plugins/scanners/typescript/package.json'
 import type { AnnotatedArchitectureModel } from '../src/types.ts'
@@ -141,7 +141,7 @@ test.concurrent('overlapping observations preserve curated membership and author
     await reconcileScanObservations(root, [typescript, angular])
     expect(await storedArchitecture(root)).toEqual(agreeing)
     expect((await loadAnnotatedArchitecture(root)).relationships).toEqual(authored)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('healthy scanners update overlapping evidence while failed scanners retain saved Code and relationships', async () => {
@@ -163,7 +163,7 @@ test.concurrent('healthy scanners update overlapping evidence while failed scann
           return JSON.parse(await readFile(root + '/${id}.json', 'utf8'))
         } }
       `)
-      await addScanner(root, `./${id}`)
+      await addFixtureScanner(root, `./${id}`)
     }
     await writeFile(path.join(root, 'angular.json'), JSON.stringify(angular))
     await writeFile(path.join(root, 'angular.fail'), '')
@@ -171,7 +171,7 @@ test.concurrent('healthy scanners update overlapping evidence while failed scann
     typescript.invocations = []
     await writeFile(path.join(root, 'src/new.ts'), 'export const added = 1')
     await writeFile(path.join(root, 'typescript.json'), JSON.stringify(typescript))
-    const summary = await scanRepository(root)
+    const summary = await scanRepository(root, pluginFixtureOptions(root))
     expect(summary.scannerFailures?.map(error => error.scanner)).toEqual(['angular', 'broken'])
     expect(formatScanReport(root, summary)).toContain('tool unavailable')
     const after = await loadAnnotatedArchitecture(root)
@@ -180,9 +180,9 @@ test.concurrent('healthy scanners update overlapping evidence while failed scann
       .toEqual(before.elements.flatMap(element => element.code).filter(code => code.scanner === 'angular'))
     expect(after.relationships).toEqual(before.relationships)
     await rm(path.join(root, 'angular.fail'))
-    const recovered = await scanRepository(root)
+    const recovered = await scanRepository(root, pluginFixtureOptions(root))
     expect(recovered.scannerFailures?.map(error => error.scanner)).toEqual(['broken'])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('TypeScript locates declarations and invocations using source offsets', async () => {
@@ -195,7 +195,7 @@ test.concurrent('TypeScript locates declarations and invocations using source of
     expect(source.slice(operation.position, operation.position! + 15)).toBe('export function')
     expect(source.slice(call.position, call.position! + 11)).toBe('output.emit')
     expect(call.unresolved).toBe(true)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('the scan report prints one line per scanner and diagnostic code while failures stay individual', () => {

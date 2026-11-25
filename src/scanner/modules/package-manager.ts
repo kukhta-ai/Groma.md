@@ -62,9 +62,10 @@ export async function readPublishedRelease<Manifest>(
 }
 
 /** Download the dependencies of the package.json in `directory`. `source` names them in the error. */
-export async function installDependencies(directory: string, source: string, registry?: string, signal?: AbortSignal): Promise<void> {
+export async function installDependencies(directory: string, source: string, registry?: string, signal?: AbortSignal, frozen = false): Promise<void> {
   // A release selected by pm view can be newer than install's cached registry manifest.
-  const { exitCode, stderr } = await runPackageManager(directory, ['install', '--ignore-scripts', '--no-cache'], registry, signal)
+  const args = ['install', '--ignore-scripts', '--no-cache', ...(frozen ? ['--frozen-lockfile'] : [])]
+  const { exitCode, stderr } = await runPackageManager(directory, args, registry, signal)
   if (exitCode !== 0) {
     throw new Error(`Could not download ${source}. Check your connection and registry access, then retry.\n${stderr.trim() || `exit ${exitCode}`}`)
   }

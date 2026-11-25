@@ -1,3 +1,4 @@
+import { approveConfiguredScanners, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { expect, test } from 'bun:test'
 import path from 'node:path'
 import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises'
@@ -14,18 +15,27 @@ const mixedFixture = path.resolve(import.meta.dir, '../test/fixtures/mixed-scann
 const typescriptFixture = path.resolve(import.meta.dir, '../test/fixtures/typescript-outline')
 const solutionFixture = path.resolve(import.meta.dir, '../test/fixtures/typescript-outline-solution')
 
-async function mixedComponent() {
-  const world = await loadAnnotatedArchitecture(mixedFixture)
-  return { world, component: world.elements.find(element => element.kind === 'component')! }
+async function mixedComponent(root?: string) {
+  const selected = root ?? await mkdtemp(path.join(tmpdir(), 'groma-outline-world-'))
+  try {
+    if (root === undefined) await cp(mixedFixture, selected, { recursive: true })
+    const world = await loadAnnotatedArchitecture(selected)
+    return { world, component: world.elements.find(element => element.kind === 'component')! }
+  } finally {
+    if (root === undefined) await closePluginFixture(selected)
+  }
 }
 
 test.concurrent('snapshot outlines use installed repository scanners without loading them from the source snapshot', async () => {
   const snapshot = await mkdtemp(path.join(tmpdir(), 'groma-outline-snapshot-'))
+  const root = await mkdtemp(path.join(tmpdir(), 'groma-outline-selected-'))
   try {
-    const { world, component } = await mixedComponent()
-    const files = await readSnapshotCodeStructure(mixedFixture, snapshot, world, component.representationId, [])
+    await cp(mixedFixture, root, { recursive: true })
+    await approveConfiguredScanners(root)
+    const { world, component } = await mixedComponent(root)
+    const files = await readSnapshotCodeStructure(root, snapshot, world, component.representationId, [], pluginFixtureOptions(root))
     expect(files?.map(file => file.declarations[0]?.name)).toEqual(['beta', 'alpha'])
-  } finally { await rm(snapshot, { recursive: true, force: true }) }
+  } finally { await rm(snapshot, { recursive: true, force: true }); await closePluginFixture(root) }
 })
 
 test.concurrent('a scanner that cannot outline, such as one missing its worker, leaves the other scanners outlining', async () => {
@@ -39,14 +49,20 @@ test.concurrent('a scanner that cannot outline, such as one missing its worker, 
 }
 `)
     const { world, component } = await mixedComponent()
-    const files = await readSnapshotCodeStructure(root, root, world, component.representationId, [])
+    await approveConfiguredScanners(root)
+    const files = await readSnapshotCodeStructure(root, root, world, component.representationId, [], pluginFixtureOptions(root))
     expect(files?.map(file => [file.file, file.declarations[0]?.name])).toEqual([['src/orders.alpha', 'alpha']])
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('a component whose Code spans two scanners outlines every file in Code order', async () => {
-  const { world, component } = await mixedComponent()
-  const files = await readCodeStructure(mixedFixture, world, null, component.representationId) ?? []
+  const root = await mkdtemp(path.join(tmpdir(), 'groma-outline-live-'))
+  try {
+  await cp(mixedFixture, root, { recursive: true })
+  expect(await Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'ignore' }).exited).toBe(0)
+  await approveConfiguredScanners(root)
+  const { world, component } = await mixedComponent(root)
+  const files = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root)) ?? []
 
   // Each fixture scanner names its only declaration after itself.
   expect(files.map(file => [file.file, file.declarations[0]?.name]))
@@ -54,6 +70,7 @@ test.concurrent('a component whose Code spans two scanners outlines every file i
   const codeStructure = { elementId: component.representationId, files }
   expect(outlineStopKeys({ currentId: component.representationId, detailsTab: 'how', codeStructure }))
     .toEqual(component.code.map(reference => outlineRowKey(reference.file, 0)))
+  } finally { await closePluginFixture(root) }
 })
 
 test.concurrent('the web details pane loads the outline of a component without TypeScript files', async () => {
@@ -138,6 +155,7 @@ export default {
     return refs.map(ref => ({ file: ref.file, declarations: [{ kind: 'function', line: 1, visibility: 'public', entry: false, name }] }));
   }
 }`)
+    await approveConfiguredScanners(root)
     await git('init', '--quiet')
     await git('add', '.')
     await git('-c', 'user.name=Outline Test', '-c', 'user.email=outline@example.invalid', 'commit', '--quiet', '-m', 'source settings')
@@ -146,10 +164,10 @@ export default {
     const world = await loadAnnotatedArchitecture(root)
     const component = world.elements.find(element => element.kind === 'component')!
     const before = structuredClone(world)
-    const current = await readCodeStructure(root, world, null, component.representationId)
-    const historical = await readCodeStructure(root, world, revision, component.representationId)
+    const current = await readCodeStructure(root, world, null, component.representationId, pluginFixtureOptions(root))
+    const historical = await readCodeStructure(root, world, revision, component.representationId, pluginFixtureOptions(root))
     expect(current?.map(file => [file.file, file.declarations[0]?.name])).toEqual([['src/orders.alpha', 'current setting']])
     expect(historical?.map(file => [file.file, file.declarations[0]?.name])).toEqual([['src/orders.alpha', 'historical setting']])
     expect(world).toEqual(before)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 })

@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test'
-import { cp, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import type { ScannerPlugin } from '@groma/scanner'
 import manifest from '../plugins/scanners/csharp/package.json'
 import { loadAnnotatedArchitecture, reconcileScanObservations } from '../src/core.ts'
@@ -36,7 +37,7 @@ packaged('packaged C# partial classes retain one curated owner and attach newly 
     expect((await reconcileScanObservations(root, [(await scanner.scan(root, {}, inputs))!])).created).toBe(0)
     expect(await loadAnnotatedArchitecture(root)).toEqual(curated)
     let completed: (() => void) | undefined
-    session = await createScannerSession(root, { onFold() { completed?.() } })
+    session = await createScannerSession(root, { ...pluginFixtureOptions(root), onFold() { completed?.() } })
     await session.change({ action: 'add', source: artifact! })
     expect(session.state.plugins.find(scanner => scanner.id === 'csharp')?.status).toBe('ready')
     const changed = Promise.withResolvers<void>()
@@ -52,6 +53,6 @@ packaged('packaged C# partial classes retain one curated owner and attach newly 
     expect(new Set(matches[0]!.code.map(code => code.file))).toEqual(new Set([...files, added]))
   } finally {
     await session?.close()
-    await rm(root, { recursive: true, force: true })
+    await closePluginFixture(root)
   }
 }, 20000)

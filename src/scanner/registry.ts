@@ -13,6 +13,9 @@ import type {
 import { officialScannerCatalog } from './modules/official-catalog.ts'
 import { discoverScanners } from './modules/discovery.ts'
 import { compileWatchPatterns } from './watch-patterns.ts'
+import { parseScannerSource, scannerSourceIdentity } from './modules/package.ts'
+import { pluginContentIntegrity } from '../plugins/integrity.ts'
+import { requireApprovedPlugin } from '../plugins/trust.ts'
 
 export class ScannerFailure extends Error {
   readonly scanner: string
@@ -72,16 +75,25 @@ function scannerPlugin(value: unknown, expectedId: string): ScannerPlugin {
   return candidate as ScannerPlugin
 }
 
-export async function importScanner(entry: string, id: string): Promise<ScannerPlugin> {
-  const module: unknown = await import(pathToFileURL(entry).href)
+export async function importScanner(root: string, selected: FoundScannerModule, options: ScannerResolutionOptions = {}): Promise<ScannerPlugin> {
+  const source = parseScannerSource(root, selected.source)
+  if (!selected.integrity) throw new Error(`Explicit content approval is required for ${selected.id}`)
+  await requireApprovedPlugin(root, {
+    kind: 'scanner', id: selected.id, source: await scannerSourceIdentity(source), name: selected.name,
+    version: selected.version, integrity: selected.integrity,
+  }, selected.contentRoot, selected.entry, options)
+  if (source.kind === 'local' && await pluginContentIntegrity(source.packageRoot) !== selected.integrity) {
+    throw new Error(`Local scanner content changed: ${selected.id}`)
+  }
+  const module: unknown = await import(pathToFileURL(selected.entry).href)
   const exported = module as { default?: unknown }
-  return scannerPlugin(exported.default, id)
+  return scannerPlugin(exported.default, selected.id)
 }
 
 /** A found scanner ready to run in this project, for scans and readiness checks alike. */
-export async function configuredPlugin(module: FoundScannerModule, config: GromaConfig): Promise<ConfiguredPlugin> {
+export async function configuredPlugin(root: string, module: FoundScannerModule, config: GromaConfig, options: ScannerResolutionOptions = {}): Promise<ConfiguredPlugin> {
   return {
-    plugin: await importScanner(module.entry, module.id),
+    plugin: await importScanner(root, module, options),
     ...(module.settings === undefined ? {} : { settings: module.settings }),
     ...configuredSelection(config, module.id),
   }
@@ -148,7 +160,7 @@ export async function loadScannerRegistry(
     ? await discoverScanners(repositoryRoot, options) : undefined
   const blocked = new Set(proposal?.recommendations.filter(item => item.status === 'incompatible').map(item => item.id))
   const scanners = await Promise.all(found.filter(module => !blocked.has(module.id)).map(module =>
-    configuredPlugin(module, config).catch((error: unknown): ConfiguredPlugin => ({
+    configuredPlugin(repositoryRoot, module, config, options).catch((error: unknown): ConfiguredPlugin => ({
       // A failed import reads no file, so no change triggers it. Retry/settings reload the registry.
       plugin: { id: module.id, async scan() { throw error } },
       included: () => false, excluded: () => false,

@@ -1,14 +1,13 @@
 import { spawn } from 'node:child_process'
 
 import {
-  EMPTY_WORK_SOURCE,
   type WorkItem,
   type WorkItemDetails,
   type WorkSource,
   type WorkSourcePlugin,
 } from '@groma/work-source'
 
-type BacklogCommandResolver = () => string | null
+type BacklogCommandResolver = () => string | null | Promise<string | null>
 
 function findBacklogCommand(): string | null {
   return Bun.which('backlog')
@@ -148,10 +147,15 @@ type BacklogTaskDetails = Omit<WorkItemDetails,
 
 function createBacklogSource(
   repositoryRoot: string,
-  command: string,
+  resolveCommand: BacklogCommandResolver,
 ): WorkSource {
   let watchedTasks: BacklogTaskSummary[] | undefined
-  const run = (args: string[]) => runBacklog(command, args, repositoryRoot)
+  async function command(): Promise<string> {
+    const selected = await resolveCommand()
+    if (selected === null) throw new Error('Backlog.md is not available')
+    return selected
+  }
+  const run = async (args: string[]) => runBacklog(await command(), args, repositoryRoot)
   return {
     async read() {
       const [tasks, statusesText, defaultStatusText] = await Promise.all([
@@ -192,13 +196,20 @@ function createBacklogSource(
       }
     },
     watch(onChange) {
-      const watcher = watchBacklog(command, repositoryRoot, tasks => {
-        watchedTasks = tasks
-        onChange()
+      let closed = false
+      const watcher = command().then(selected => {
+        if (closed) return undefined
+        return watchBacklog(selected, repositoryRoot, tasks => {
+          watchedTasks = tasks
+          onChange()
+        })
       })
+      // Surface a revoked or changed approval without an unhandled rejection; no process was started.
+      void watcher.catch(error => console.error(error instanceof Error ? error.message : String(error)))
       return {
         async close() {
-          await watcher.close()
+          closed = true
+          await (await watcher)?.close()
           watchedTasks = undefined
         },
       }
@@ -212,17 +223,14 @@ export function createBacklogPlugin(
   return {
     id: 'backlog',
     async readiness() {
-      const command = resolveCommand()
+      const command = await resolveCommand()
       if (command === null) return { status: 'missing' }
       // `backlog --version` prints the version alone, such as 1.53.0.
       const version = (await runBacklog(command, ['--version'], process.cwd())).trim()
       return { status: 'found', version }
     },
     create(repositoryRoot) {
-      const command = resolveCommand()
-      return command === null
-        ? EMPTY_WORK_SOURCE
-        : createBacklogSource(repositoryRoot, command)
+      return createBacklogSource(repositoryRoot, resolveCommand)
     },
   }
 }

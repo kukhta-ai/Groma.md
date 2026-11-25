@@ -17,6 +17,7 @@ import { humanInstructionGuide } from './instructions.ts'
 import { listWindowRequested, parseListWindow, withListWindowOptions, type ListWindow } from './list-window.ts'
 import { registerLintCommand } from './lint-command.ts'
 import { registerPluginCommands } from './plugins/cli.ts'
+import { usePluginApprovalsFile } from './plugins/trust.ts'
 import { registerScannerCommands } from './scanner/cli.ts'
 import { formatScanReport, scanRepository, watchScan } from './scanner.ts'
 import { startBackgroundScannerUpdates } from './scanner/background-updates.ts'
@@ -41,11 +42,11 @@ async function startWebOnNextPort(port: number, scan: boolean, onListening: (url
   }
 }
 
-async function openWeb(port?: number, scan = true): Promise<void> {
+async function openWeb(port?: number, scan = true, open = true): Promise<void> {
   try {
     const { startWebViewer } = await import('./viewers/web/server.ts')
     const onListening = (url: string) => console.log(`groma web at ${url}`)
-    let viewer: { close: () => Promise<void> }
+    let viewer: Awaited<ReturnType<typeof startWebViewer>>
     try {
       viewer = await startWebViewer(process.cwd(), { port, scan, onListening })
     } catch (error) {
@@ -59,7 +60,13 @@ async function openWeb(port?: number, scan = true): Promise<void> {
       if (accepted !== true) return
       viewer = await startWebOnNextPort(port ?? 4747, scan, onListening)
     }
-    stopOnSignal(() => viewer.close())
+    const { createWebHandoff, openWebBrowser } = await import('./viewers/web/handoff.ts')
+    const handoff = await createWebHandoff(process.cwd(), viewer.bootstrapUrl, viewer.bootstrapExpiresAt)
+      .catch(async error => { await viewer.close(); throw error })
+    viewer.onBootstrapConsumed(() => handoff.close())
+    stopOnSignal(async () => { await handoff.close(); await viewer.close() })
+    console.log(`Private browser launcher: ${handoff.file}`)
+    if (open) await openWebBrowser(viewer.bootstrapUrl)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     process.exitCode = 1
@@ -102,7 +109,8 @@ async function openTerminalView(target: string | undefined, plain: boolean, wind
 
 async function openTerminalFromWelcome(...command: string[]): Promise<void> {
   const entry = Bun.isStandaloneExecutable ? [] : [fileURLToPath(import.meta.url)]
-  const child = Bun.spawn([process.execPath, ...entry, ...command], {
+  const approvals = program.opts<{ pluginApprovals?: string }>().pluginApprovals
+  const child = Bun.spawn([process.execPath, ...entry, ...(approvals ? ['--plugin-approvals', approvals] : []), ...command], {
     cwd: process.cwd(),
     stdin: 'inherit',
     stdout: 'inherit',
@@ -132,7 +140,9 @@ async function initializeProject(
   }
 }
 
-async function exportWeb(directory: string, options: { url?: string; revision?: string; from?: string }): Promise<void> {
+type ExportOptions = { url?: string; revision?: string; from?: string; ackSourceExport?: boolean; sourceManifest?: string }
+
+async function exportWeb(directory: string, options: ExportOptions): Promise<void> {
   const root = process.cwd()
   const { exportWebViewer } = await import('./viewers/web/export.ts')
   const exported = await exportWebViewer(root, directory, options)
@@ -207,7 +217,9 @@ program
   .name('groma')
   .version(packageJson.version)
   .description("This repo's architecture in Git")
+  .option('--plugin-approvals <file>', 'absolute user-owned approval authority outside Git checkouts')
   .option('--plain', 'print as plain text')
+  .hook('preAction', () => { usePluginApprovalsFile(program.opts<{ pluginApprovals?: string }>().pluginApprovals) })
   .action(async () => {
     const interactive = process.stdin.isTTY === true
       && process.stdout.isTTY === true
@@ -233,8 +245,9 @@ program
   .command('web')
   .description('Scan this repo and open the browser map')
   .option('--port <number>', 'port to listen on', Number)
+  .option('--no-open', 'write a private launcher without opening a browser')
   .action(async options => {
-    await openWeb(options.port)
+    await openWeb(options.port, true, options.open)
   })
 
 program
@@ -244,12 +257,14 @@ program
   .option('--url <url>', 'public URL of the exported directory, for social previews')
   .option('--revision <commit>', 'export this commit instead of the working tree')
   .option('--from <commit>', 'compare this starting commit with --revision')
+  .option('--ack-source-export', 'acknowledge that the export contains complete current or historical source')
+  .option('--source-manifest <file>', 'write captured raw source inventory to an absolute private file')
   .addOption(new Option('--watch').hideHelp())
   .on('option:watch', () => {
     console.log('Coming soon.')
     process.exit(0)
   })
-  .action(async (directory: string, options: { url?: string; revision?: string; from?: string }) => {
+  .action(async (directory: string, options: ExportOptions) => {
     await exportWeb(directory, options)
   })
 

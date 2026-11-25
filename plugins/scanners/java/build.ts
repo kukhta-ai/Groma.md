@@ -53,6 +53,6 @@ if (import.meta.main) {
   const output = path.join(pluginRoot, 'dist/package')
   await rm(output, { recursive: true, force: true })
   await buildPackage(output)
-  await cp(path.join(output, 'dist'), path.join(pluginRoot, 'dist'), { recursive: true })
+  await cp(path.join(output, 'dist'), path.join(pluginRoot, 'dist'), { recursive: true, verbatimSymlinks: true })
   console.log(output)
 }

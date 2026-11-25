@@ -1,12 +1,14 @@
 import path from 'node:path'
 import type { ScannerSettings } from '@groma/scanner'
-import { backlogPlugin } from '@groma/work-source-backlog'
 import ignore from 'ignore'
 import { GromaFileSystem } from './groma-filesystem.ts'
+import { pluginIntegrityPattern } from './plugins/integrity.ts'
 
 export interface ConfiguredScanner {
   id: string
   source: string
+  /** Exact selected executable content; permission to run it lives outside this repository. */
+  integrity?: string
   settings?: ScannerSettings
   /** Git ignore patterns naming the files this scanner reads; adding the scanner writes the globs its package declares. */
   include: string[]
@@ -18,8 +20,9 @@ export interface ConfiguredScanner {
 export interface ConfiguredWorkSource {
   /** The bundled work source, such as `backlog`. */
   id: string
-  /** The lowest version of the work source's command-line tool this project uses, raised when someone updates it. */
+  /** The exact selected command-line tool version. */
   version: string
+  integrity?: string
 }
 
 /**
@@ -34,7 +37,7 @@ export interface GromaConfig {
   exclude?: string[]
   /** Whether files Git ignores stay out of every scan; true unless set to false. */
   useGitignore?: boolean
-  /** Check for npm scanner updates in the background; true unless set to false. */
+  /** Check published update metadata in the background; false unless explicitly enabled. Never installs code. */
   automaticUpdates?: boolean
 }
 
@@ -76,6 +79,14 @@ export function inclusion(list: readonly string[]): (file: string) => boolean {
 }
 
 
+function configuredSettings(value: unknown, filename: string, index: number): ScannerSettings | undefined {
+  if (value === undefined) return undefined
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${filename} scanners[${index}].settings must be an object`)
+  }
+  return value as ScannerSettings
+}
+
 function configuredScanner(
   value: unknown,
   index: number,
@@ -86,19 +97,17 @@ function configuredScanner(
   }
   const candidate = value as Record<string, unknown>
   const fields = Object.keys(candidate)
-  if (fields.some(field => !['id', 'source', 'settings', 'include', 'exclude'].includes(field))) {
-    throw new Error(`${sourceFilename} scanners[${index}] must contain id, source and include, and optionally settings and exclude`)
+  if (fields.some(field => !['id', 'source', 'integrity', 'settings', 'include', 'exclude'].includes(field))) {
+    throw new Error(`${sourceFilename} scanners[${index}] must contain id, source and include, and optionally integrity, settings and exclude`)
   }
+  const integrity = configuredIntegrity(candidate.integrity, sourceFilename)
   if (!stringArray(candidate.include)) {
     throw new Error(`${sourceFilename} scanners[${index}].include must be an array of strings naming the files the scanner reads`)
   }
   if (candidate.exclude !== undefined && !stringArray(candidate.exclude)) {
     throw new Error(`${sourceFilename} scanners[${index}].exclude must be an array of strings`)
   }
-  if (candidate.settings !== undefined && (candidate.settings === null
-    || typeof candidate.settings !== 'object' || Array.isArray(candidate.settings))) {
-    throw new Error(`${sourceFilename} scanners[${index}].settings must be an object`)
-  }
+  const settings = configuredSettings(candidate.settings, sourceFilename, index)
   if (typeof candidate.id !== 'string' || !pluginId.test(candidate.id)) {
     throw new Error(`${sourceFilename} scanners[${index}].id must be lowercase kebab-case`)
   }
@@ -106,10 +115,19 @@ function configuredScanner(
     throw new Error(`${sourceFilename} scanners[${index}].source must be non-empty`)
   }
   return { id: candidate.id, source: candidate.source,
-    ...(candidate.settings === undefined ? {} : { settings: candidate.settings as ScannerSettings }),
+    ...(integrity === undefined ? {} : { integrity }),
+    ...(settings === undefined ? {} : { settings }),
     include: candidate.include,
     ...(candidate.exclude === undefined ? {} : { exclude: candidate.exclude }),
   }
+}
+
+function configuredIntegrity(value: unknown, filename: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !pluginIntegrityPattern.test(value)) {
+    throw new Error(`${filename} plugin integrity must be an exact sha256 content digest`)
+  }
+  return value
 }
 
 function configuredWorkSources(value: unknown, filename: string): ConfiguredWorkSource[] {
@@ -118,8 +136,8 @@ function configuredWorkSources(value: unknown, filename: string): ConfiguredWork
   if (value.length > 1) throw new Error(`${filename} supports at most one work source; remove one before adding another`)
   return value.map(entry => {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)
-      || Object.keys(entry).some(key => !['id', 'version'].includes(key))) {
-      throw new Error(`${filename} workSources entries must contain only id and version`)
+      || Object.keys(entry).some(key => !['id', 'version', 'integrity'].includes(key))) {
+      throw new Error(`${filename} workSources entries must contain id and version, and optionally integrity`)
     }
     if (typeof entry.id !== 'string' || !pluginId.test(entry.id)) {
       throw new Error(`${filename} workSources id must be lowercase kebab-case`)
@@ -127,7 +145,8 @@ function configuredWorkSources(value: unknown, filename: string): ConfiguredWork
     if (typeof entry.version !== 'string' || !exactVersion.test(entry.version)) {
       throw new Error(`${filename} workSources version must be an exact version such as 1.2.3`)
     }
-    return { id: entry.id, version: entry.version }
+    const integrity = configuredIntegrity(entry.integrity, filename)
+    return { id: entry.id, version: entry.version, ...(integrity === undefined ? {} : { integrity }) }
   })
 }
 
@@ -195,17 +214,7 @@ export async function readGromaConfig(repositoryRoot: string): Promise<GromaConf
     if (filesystem.exists('config.json')) {
       return parseGromaConfig(await filesystem.read('config.json'), filesystem.sourceFilename('config.json'))
     }
-    if (!filesystem.exists('scanners.json')) return { scanners: [], workSources: [] }
-
-    // Before config.json, an installed Backlog CLI enabled tasks without a recorded selection.
-    const config = parseGromaConfig(await filesystem.read('scanners.json'), filesystem.sourceFilename('scanners.json'))
-    if (!config.scanners.some(scanner => scanner.id === 'backlog')) {
-      const backlog = await backlogPlugin.readiness()
-      config.workSources = backlog.status === 'found' ? [{ id: 'backlog', version: backlog.version }] : []
-    }
-    await writeGromaConfig(repositoryRoot, config)
-    await filesystem.removeSource(filesystem.sourceFilename('scanners.json'))
-    return config
+    return { scanners: [], workSources: [] }
   })
 }
 

@@ -2,10 +2,10 @@ import { expect, test } from 'bun:test'
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
 import { parseScanObservation, type ScanObservation } from '@groma/scanner'
 import { buildPackage, buildWorker } from '../plugins/scanners/java/build.ts'
 import { javaCommand, run } from '../plugins/scanners/java/src/process.ts'
-import { addScanner } from '../src/scanner/modules/inventory.ts'
 
 const fixtures = path.resolve(import.meta.dir, '../test/fixtures')
 const sources = ['Copy', 'Forms', 'Ready'].map(name => `src/main/java/duplicates/${name}.java`)
@@ -50,7 +50,7 @@ test.concurrent('Java reports tokens and ranges for named bodies only, normalizi
     expect(named('Copy#afterLoop').tokens).not.toEqual(named('Ready#afterLoop').tokens!)
     // Grouping parentheses keep (a + b) * c apart from a + b * c.
     expect(named('Copy#combine').tokens).not.toEqual(named('Ready#combine').tokens!)
-  } finally { await rm(root, { recursive: true, force: true }) }
+  } finally { await closePluginFixture(root) }
 }, 60000)
 
 test.concurrent('groma lint reports identical and near-duplicate Java bodies across renamed local names', async () => {
@@ -58,14 +58,14 @@ test.concurrent('groma lint reports identical and near-duplicate Java bodies acr
   try {
     const root = path.join(temporary, 'project')
     const artifact = path.join(temporary, 'scanner')
-    if (process.env.GROMA_TEST_JAVA_PACKAGE) await cp(process.env.GROMA_TEST_JAVA_PACKAGE, artifact, { recursive: true })
+    if (process.env.GROMA_TEST_JAVA_PACKAGE) await cp(process.env.GROMA_TEST_JAVA_PACKAGE, artifact, { recursive: true, verbatimSymlinks: true })
     else await buildPackage(artifact)
     await cp(path.join(fixtures, 'empty-project'), root, { recursive: true })
     await cp(path.join(fixtures, 'java-duplicates'), root, { recursive: true })
     const git = Bun.spawn(['git', 'init', '--quiet', root], { stdout: 'ignore', stderr: 'pipe' })
     expect(await git.exited, await new Response(git.stderr).text()).toBe(0)
-    await addScanner(root, artifact)
-    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), 'lint'],
+    await addFixtureScanner(root, artifact)
+    const lint = Bun.spawn([process.execPath, path.resolve(import.meta.dir, '../src/cli.ts'), '--plugin-approvals', pluginFixtureOptions(root).approvalsFile!, 'lint'],
       { cwd: root, stdout: 'pipe', stderr: 'pipe' })
     const [code, out, error] = await Promise.all([lint.exited, new Response(lint.stdout).text(), new Response(lint.stderr).text()])
     expect(code, error).toBe(1)

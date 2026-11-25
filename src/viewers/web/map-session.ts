@@ -6,8 +6,9 @@ import { writes } from '../../authoring.ts'
 import { EditConflict } from '../../authoring-conflict.ts'
 import { GromaBusyError } from '../../groma-filesystem.ts'
 import type { StructuralResult } from '../../curate.ts'
+import type { ScannerInstallOptions } from '../../scanner/modules/inventory.ts'
 import { createScannerSession } from '../../scanner/session.ts'
-import { parsePluginSettingsAction, withPluginUpgrades } from '../../plugins/settings.ts'
+import { pluginResponse } from './plugin-routes.ts'
 import { pinsOf } from '../../work/pins.ts'
 import { workSourceSession } from '../../work/sources.ts'
 import { ownedFiles } from '../../history/comparison.ts'
@@ -28,9 +29,10 @@ async function structureResponse(
   repositoryRoot: string,
   selected: Pick<WebPayload, 'world' | 'revision'>,
   element: string,
+  pluginOptions?: ScannerInstallOptions,
 ): Promise<Response> {
   try {
-    const structure = await readCodeStructure(repositoryRoot, selected.world, selected.revision?.id ?? null, element)
+    const structure = await readCodeStructure(repositoryRoot, selected.world, selected.revision?.id ?? null, element, pluginOptions)
     return structure === undefined
       ? new Response('Component not found', { status: 404 })
       : Response.json(structure)
@@ -74,11 +76,11 @@ async function loadMap(
  */
 export async function createWebMapSession(
   repositoryRoot: string,
-  options: { workSource?: WorkSource; scan?: boolean; readOnly?: boolean; onProgress?: (progress: StartupProgress) => void | Promise<void> } = {},
-): Promise<{ fetch: (request: Request) => Promise<Response>; close: () => Promise<void> }> {
+  options: { pluginOptions?: ScannerInstallOptions; workSource?: WorkSource; scan?: boolean; readOnly?: boolean; onProgress?: (progress: StartupProgress) => void | Promise<void> } = {},
+): Promise<{ fetch: (request: Request, sessionId?: string) => Promise<Response>; close: () => Promise<void> }> {
   options.onProgress?.({ phase: 'preparing-viewer' })
   const renderer = await bundleRenderer()
-  const workSource = await workSourceSession(repositoryRoot, options.workSource)
+  const workSource = await workSourceSession(repositoryRoot, options.workSource, options.pluginOptions)
   let revisions: WebRevision[] = []
   let revisionRead: Promise<WebRevision[]> | undefined
   let map: WebMapPayload
@@ -213,7 +215,7 @@ export async function createWebMapSession(
         : { ...item, code: [...(change.after?.code ?? []), ...(change.before?.code ?? [])] }) }
     }
     return url.pathname === '/code.json'
-      ? structureResponse(repositoryRoot, selected, element)
+      ? structureResponse(repositoryRoot, selected, element, options.pluginOptions)
       : sourceResponse(repositoryRoot, selected, element, file)
   }
 
@@ -270,6 +272,7 @@ export async function createWebMapSession(
 
   let initialScan = true
   const scannerSession = options.readOnly ? undefined : await createScannerSession(repositoryRoot, {
+    ...options.pluginOptions,
     onPluginsChanged: () => workSource.reconfigure(),
     scan: options.scan,
     watchesFile: file => sourceFiles.has(file),
@@ -418,23 +421,15 @@ export async function createWebMapSession(
     ['/remove', request => writeResponse(request, writes.remove)],
     ['/accept', request => writeResponse(request, writes.accept)],
   ])
-  if (scannerSession !== undefined) {
-    routes.set('/plugin-settings', async (_request, url) => {
-      const check = url.searchParams.has('updates')
-      const settings = await scannerSession.refresh(check)
-      return Response.json(check ? await withPluginUpgrades(settings) : settings)
-    })
-    writeRoutes.set('/plugin-settings', async request => {
-      try { await scannerSession.change(parsePluginSettingsAction(await request.json())); return Response.json(scannerSession.state) }
-      catch (error) { return new Response(error instanceof Error ? error.message : String(error), { status: 400 }) }
-    })
-  }
 
-  async function responseFor(request: Request): Promise<Response> {
+  async function responseFor(request: Request, sessionId?: string): Promise<Response> {
     const url = new URL(request.url)
     if (request.method === 'POST' && options.readOnly) return new Response('This map is read-only because plugins are missing.', { status: 403 })
+    const plugins = await pluginResponse(repositoryRoot, request, sessionId, scannerSession, options.pluginOptions)
+    if (plugins !== undefined) return plugins
     const write = request.method === 'POST' ? writeRoutes.get(url.pathname) : undefined
     if (write !== undefined) return write(request)
+    if (request.method !== 'GET') return new Response('Method not allowed', { status: 405 })
     const route = routes.get(url.pathname)
     return route === undefined ? pageResponse(url) : route(request, url)
   }
