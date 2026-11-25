@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { appendFile, cp, mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions, runPluginFixtureInChild } from './plugin-fixture.ts'
 import rustPackage from '../plugins/scanners/rust/package.json'
 import rustScanner, { scanRustSource } from '../plugins/scanners/rust/src/index.ts'
 
@@ -145,6 +145,7 @@ rustTest('lint finds identical and near-duplicate Rust functions but never closu
 }, 60000)
 
 rustTest('a component outlines its Rust file beside a TypeScript file under the Rust visibility rules', async () => {
+  if (await runPluginFixtureInChild(import.meta.path, 'a component outlines its Rust file beside a TypeScript file under the Rust visibility rules')) return
   await fixture('rust-outline', async root => {
     await addFixtureScanner(root, packagePath)
     await addFixtureScanner(root, path.resolve(import.meta.dir, '../plugins/scanners/typescript'))

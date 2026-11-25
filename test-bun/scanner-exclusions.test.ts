@@ -11,7 +11,7 @@ import { buildPackage } from '../plugins/scanners/vue/build.ts'
 import vue from '../plugins/scanners/vue/package.json'
 import { loadScannerRegistry } from '../src/scanner/registry.ts'
 import { readGromaConfig, writeGromaConfig } from '../src/config.ts'
-import { addFixtureScanner, approveConfiguredScanners, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
+import { addFixtureScanner, approveConfiguredScanners, closePluginFixture, pluginFixtureOptions, runPluginFixtureInChild } from './plugin-fixture.ts'
 import { checkScannerReadiness } from '../src/scanner/modules/readiness.ts'
 
 async function write(root: string, file: string, source: string): Promise<void> {
@@ -199,6 +199,7 @@ test.concurrent('every scanner filters complete evidence without narrowing invoc
 })
 
 test.concurrent('the lists of a scanner, written from its install defaults, follow the global list for that scanner alone', async () => {
+  if (await runPluginFixtureInChild(import.meta.path, 'the lists of a scanner, written from its install defaults, follow the global list for that scanner alone')) return
   const root = await repository()
   try {
     for (const file of observation('fixture').files) await write(root, file.file, 'export const value = 1\n')

@@ -4,7 +4,7 @@ title: Protect local Groma web access executable plugins and confidential export
 status: In Progress
 assignee: []
 created_date: '2026-11-13 06:09'
-updated_date: '2026-11-24 23:02'
+updated_date: '2026-11-25 00:05'
 labels: []
 dependencies: []
 modified_files:
@@ -149,6 +149,10 @@ Native macOS CI7f4be04 reports one fixture mismatch: the security ledger correct
 Changed already tracked test-bun/plugin-approval.test.ts: canonical realpath fixture base makes ledger identity expectations portable to macOS temp-directory aliases; no assertions removed.
 
 Canonical macOS fixture correction passes13 real plugin-approval tests/53 assertions locally; existing refusal and cross-project binding assertions unchanged. Linux full CI7f4be04 passed. macOS full CI had only the raw /var versus canonical /private/var expectation failure. Windows full result still running; preserve that run for native defect evidence while the corrected fixture enters a fresh full CI.
+
+CI45506453764 on1b98487 passes Linux/macOS; Windows has3 cleanup-only EPERM failures in the existing TypeScript-installed mixed Go/Rust outline and scanner-default exclusion cases. SDK API.close ends worker stdin without awaiting exit. Keep the complete assertions and execute these three cases once in disposable Bun subprocesses; the parent owns a private temporary directory and removes it strictly after child exit, with an explicit completion marker so a missed/conditional-skipped child cannot pass. Pinned Bun1.4.4 help verifies --test-name-pattern and --no-orphans. No production scanner, consent or confinement rules change. The restored protected runtime is still provisioning; agent-instructions currently rejects missing receipt, so the previously selected task/inspect guides were re-read from the source docs. Local Backlog1.45.2 does not support the newer instructions subcommand; task edits still use the mandated local CLI. Full native fork checks and all-platform CI remain required.
+
+Prepared fixture-lifetime fix on1b98487: the3 existing assertions run unchanged in one exact-name Bun1.4.4 subprocess each; --no-orphans bounds descendants, parent owns private canonical temporary root and strictly removes it after child exit. Completion marker rejects both unmatched and conditionally skipped child cases; native negative probes confirm rejection and no owned directory leaks. Existing scanner-exclusions6/6 passes including actual child execution; TypeScript7.1.0-beta and scoped Biome4 files pass. Full bun run check executed:939 viewer passes64 conditional skips28 failures, same unavailable Java/Swift/COBOL/JVM prerequisites as prior local baseline, so local full gate remains unverified. Source/consent/confinement behavior is unchanged. Own scope/spec/quality review checked parent cleanup on errors and preserved all assertions. All-platform fork CI is required before final pin; no full-gate pass claimed.
 <!-- SECTION:NOTES:END -->
 
 ## Definition of Done

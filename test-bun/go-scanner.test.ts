@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { addFixtureScanner, closePluginFixture, pluginFixtureOptions } from './plugin-fixture.ts'
+import { addFixtureScanner, closePluginFixture, pluginFixtureOptions, runPluginFixtureInChild } from './plugin-fixture.ts'
 import { buildPackage, buildWorker } from '../plugins/scanners/go/build.ts'
 import manifest from '../plugins/scanners/go/package.json'
 import { readGoCodeStructure, run, scanGoSource } from '../plugins/scanners/go/src/adapter.ts'
@@ -323,6 +323,7 @@ goTest('Go outlines defined types with their receiver methods and top-level func
 }, 60000)
 
 goTest('a component with Go and TypeScript files outlines every file in Code order', async () => {
+  if (await runPluginFixtureInChild(import.meta.path, 'a component with Go and TypeScript files outlines every file in Code order')) return
   const { root, worker } = await fixture('go-outline')
   try {
     await buildWorker(worker, go)
@@ -341,7 +342,6 @@ goTest('a component with Go and TypeScript files outlines every file in Code ord
     expect(files.every(file => file.declarations.length > 0)).toBeTrue()
   } finally { await closePluginFixture(root) }
 }, 60000)
-
 /**
  * `:name` is a parameter, `:name+` a catch-all, `:name*` an optional one and a trailing `!` a constrained one;
  * `{}` is a dynamic segment and `?` unknown text.
